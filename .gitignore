@@ -1,0 +1,22 @@
+# Dépendances
+node_modules/
+
+# Build
+dist/
+
+# Environnement (NE JAMAIS committer la clé API)
+.env
+.env.local
+.env.production
+
+# Stockage local (données en développement)
+.store.json
+.history.json
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
