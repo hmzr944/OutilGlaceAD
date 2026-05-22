@@ -118,7 +118,7 @@ const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const USE_UPSTASH   = !!(UPSTASH_URL && UPSTASH_TOKEN);
 
 if (USE_UPSTASH) {
-  console.log("✓ Stockage : Upstash Redis (persistant)");
+  console.log("⏳ Stockage : test connexion Upstash...");
 } else {
   console.log("⚠ Stockage : fichier JSON local (données perdues au redéploiement — configurez Upstash)");
 }
@@ -130,8 +130,9 @@ const upstash = async (...cmd) => {
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, "Content-Type": "application/json" },
     body:    JSON.stringify(cmd),
   });
-  if (!res.ok) throw new Error(`Upstash ${res.status}`);
+  if (!res.ok) throw new Error(`Upstash HTTP ${res.status}`);
   const d = await res.json();
+  if (d.error) throw new Error(`Upstash error: ${d.error}`);
   return d.result;
 };
 
@@ -372,7 +373,25 @@ if (!existsSync(distPath)) {
 app.use(express.static(distPath));
 app.get("*", (_req, res) => res.sendFile(join(distPath, "index.html")));
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n✓ Glacerie Ducasse — http://localhost:${PORT}`);
-  console.log(`  Stockage : ${USE_UPSTASH ? "Upstash Redis ✓" : "fichier local ⚠"}\n`);
+
+  if (USE_UPSTASH) {
+    try {
+      const ping = await upstash("PING");
+      await upstash("SET", "glacerie:_healthcheck", "ok");
+      const val = await upstash("GET", "glacerie:_healthcheck");
+      await upstash("DEL", "glacerie:_healthcheck");
+      if (val === "ok" && ping === "PONG") {
+        console.log("  Stockage : Upstash Redis ✓ (lecture/écriture vérifiées)\n");
+      } else {
+        console.error("  Stockage : Upstash ⚠ — réponse inattendue, fallback fichier activé\n");
+      }
+    } catch (e) {
+      console.error(`  Stockage : Upstash ✗ ERREUR — ${e.message}`);
+      console.error("  → Fallback fichier local activé (données perdues au redémarrage)\n");
+    }
+  } else {
+    console.log("  Stockage : fichier local ⚠ (configurez Upstash dans .env)\n");
+  }
 });
