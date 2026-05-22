@@ -47,24 +47,32 @@ export const history = {
   async get() {
     try {
       const res = await fetch("/api/history");
-      if (!res.ok) return [];
+      if (!res.ok) { console.error("History get failed:", res.status); return []; }
       return await res.json();
-    } catch { return []; }
+    } catch (e) { console.error("History get error:", e); return []; }
   },
 
+  // Retourne l'entrée créée (avec id/createdAt) si succès, null si échec
   async push({ type, label, author, data }) {
     try {
-      await fetch("/api/history", {
+      const res = await fetch("/api/history", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ type, label, author, data }),
       });
-    } catch (e) { console.error("History push error:", e); }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("History push failed:", res.status, err);
+        return null;
+      }
+      return await res.json(); // retourne l'entrée avec id et createdAt
+    } catch (e) { console.error("History push error:", e); return null; }
   },
 
   async remove(id) {
     try {
-      await fetch(`/api/history/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/history/${id}`, { method: "DELETE" });
+      if (!res.ok) console.error("History delete failed:", res.status);
     } catch (e) { console.error("History delete error:", e); }
   },
 };

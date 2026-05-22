@@ -903,7 +903,7 @@ export default function App(){
     setDelivery(prev=>({...prev,[id]:{...prev[id],[field]:field==="temp"?v:Math.max(0,+v)}})),[]);
 
   /* ── Confirmer livraison ── */
-  const confirmDelivery = useCallback(()=>{
+  const confirmDelivery = useCallback(async()=>{
     const zoneName=ZONES.find(z=>z.id===delivZone)?.label;
     setInventory(prev=>{
       const next=JSON.parse(JSON.stringify(prev));
@@ -917,8 +917,9 @@ export default function App(){
       storage.set("ad9_snap",JSON.stringify(snap)).catch(()=>{});
       return next;
     });
-    historyAPI.push({type:"livraison",label:`Livraison — ${zoneName}`,author:user?.name||"Équipe",
+    const entry=await historyAPI.push({type:"livraison",label:`Livraison — ${zoneName}`,author:user?.name||"Équipe",
       data:{zone:delivZone,delivery:Object.fromEntries(RECIPES.map(r=>[r.id,delivery[r.id]])),lots:deliveryLots}});
+    if(entry) setHistEntries(prev=>[entry,...prev]);
     setDelivery(Object.fromEntries(RECIPES.map(r=>[r.id,emptyDel()])));
     setDeliveryLots({});
     showToast(`Livraison confirmée — ${zoneName}`);
@@ -957,7 +958,7 @@ AJUSTEMENTS — raisons`
       setSuggestion(sg); setAiText(text);
       setManualOrder(Object.fromEntries(RECIPES.map(r=>[r.id,{demi:c1[r.id].demi,pleine:c1[r.id].pleine}])));
       if(c2)setManualOrder2(Object.fromEntries(RECIPES.map(r=>[r.id,{demi:c2[r.id].demi,pleine:c2[r.id].pleine}])));
-      historyAPI.push({type:"commande",label:`Commande IA — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,coeff:weather.coeff,c1,c2,aiText:text}});
+      historyAPI.push({type:"commande",label:`Commande IA — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,coeff:weather.coeff,c1,c2,aiText:text}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
       try{await storage.set("ad9_sug",JSON.stringify({s:sg,t:text}));}catch{}
     }catch{
       const sg={c1,c2,week:weekOffset};
@@ -1753,7 +1754,7 @@ AJUSTEMENTS — raisons`
                       const next=[rec,...tempRecs];
                       setTempRecs(next);
                       storage.set("ad9_temprec",JSON.stringify(next)).catch(()=>{});
-                      historyAPI.push({type:"temperature",label:`Réception — ${rec.nom||"—"}${rec.format?" ("+rec.format+")":""}`,author:user?.name||"Équipe",data:{nom:rec.nom,format:rec.format,lot:rec.lot,temp:rec.temp,heure:rec.heure,alert:rec.temp!==null&&rec.temp>-18}});
+                      historyAPI.push({type:"temperature",label:`Réception — ${rec.nom||"—"}${rec.format?" ("+rec.format+")":""}`,author:user?.name||"Équipe",data:{nom:rec.nom,format:rec.format,lot:rec.lot,temp:rec.temp,heure:rec.heure,alert:rec.temp!==null&&rec.temp>-18}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
                       setTempForm(emptyTempForm());
                       setSavedFlash(true); setTimeout(()=>setSavedFlash(false),2000);
                       showToast("Température enregistrée");
@@ -2047,11 +2048,16 @@ AJUSTEMENTS — raisons`
                 buildFn:()=>buildInventoryPDF(inventory,todayFull(),true),
                 docType:"inventaire",title:`État des stocks — ${new Date().toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
               })}/>
-              <GBtn primary label="Enregistrer dans le journal" onClick={()=>{
+              <GBtn primary label="Enregistrer dans le journal" onClick={async()=>{
                 const summary=RECIPES.filter(r=>totalZ(inventory[r.id])>0)
                   .map(r=>({name:r.name,total:totalZ(inventory[r.id]),demi:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.demi||0),0),pleine:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.pleine||0),0)}));
-                historyAPI.push({type:"inventaire",label:`Mise à jour stock — ${new Date().toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"})}`,author:user?.name||"Équipe",data:{totalGl,summary}});
-                showToast("Stock enregistré dans le journal");
+                const entry=await historyAPI.push({type:"inventaire",label:`Mise à jour stock — ${new Date().toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"})}`,author:user?.name||"Équipe",data:{totalGl,summary}});
+                if(entry){
+                  setHistEntries(prev=>[entry,...prev]);
+                  showToast("Stock enregistré dans le journal ✓");
+                } else {
+                  showToast("Erreur journal — reconnectez-vous");
+                }
               }}/>
             </BtnRow>
           </div>
@@ -2134,7 +2140,7 @@ AJUSTEMENTS — raisons`
                     try{
                       await buildOrderPDF(manualOrder,weekLabel(weekOffset),isDouble(weekOffset)?"Commande 1 — Mardi":"Commande — Mercredi");
                       const items=RECIPES.filter(r=>manualOrder[r.id]?.demi>0||manualOrder[r.id]?.pleine>0);
-                      if(items.length) historyAPI.push({type:"commande",label:`Commande${isDouble(weekOffset)?" 1":""}  — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,c1:Object.fromEntries(items.map(r=>[r.id,{...manualOrder[r.id],totalEq:(manualOrder[r.id].demi||0)+(manualOrder[r.id].pleine||0)*2}])),manual:true}});
+                      if(items.length) historyAPI.push({type:"commande",label:`Commande${isDouble(weekOffset)?" 1":""}  — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,c1:Object.fromEntries(items.map(r=>[r.id,{...manualOrder[r.id],totalEq:(manualOrder[r.id].demi||0)+(manualOrder[r.id].pleine||0)*2}])),manual:true}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
                     }catch{showToast("Erreur PDF");}
                     setPdfLoading(false);
                   }}/>
@@ -2143,7 +2149,7 @@ AJUSTEMENTS — raisons`
                     try{
                       await buildOrderPDF(manualOrder2,weekLabel(weekOffset),"Commande 2 — Jeudi");
                       const items=RECIPES.filter(r=>manualOrder2[r.id]?.demi>0||manualOrder2[r.id]?.pleine>0);
-                      if(items.length) historyAPI.push({type:"commande",label:`Commande 2 — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,c1:Object.fromEntries(items.map(r=>[r.id,{...manualOrder2[r.id],totalEq:(manualOrder2[r.id].demi||0)+(manualOrder2[r.id].pleine||0)*2}])),manual:true}});
+                      if(items.length) historyAPI.push({type:"commande",label:`Commande 2 — ${weekLabel(weekOffset)}`,author:user?.name||"Équipe",data:{week:weekOffset,c1:Object.fromEntries(items.map(r=>[r.id,{...manualOrder2[r.id],totalEq:(manualOrder2[r.id].demi||0)+(manualOrder2[r.id].pleine||0)*2}])),manual:true}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
                     }catch{showToast("Erreur PDF");}
                     setPdfLoading(false);
                   }}/>}
@@ -2277,7 +2283,7 @@ AJUSTEMENTS — raisons`
                     createdAt:new Date().toISOString(),
                     author:user?.name||"Équipe"};
                   saveTraca([rec,...tracaRecords]);
-                  historyAPI.push({type:"tracabilite",label:`Mise en place — ${rec.name}`,author:user?.name||"Équipe",data:{name:rec.name,zone:tracaZone,lot:rec.lot,dlc:rec.dlc,miseEnPlace:rec.miseEnPlace,retrait:rec.dlcJ14}});
+                  historyAPI.push({type:"tracabilite",label:`Mise en place — ${rec.name}`,author:user?.name||"Équipe",data:{name:rec.name,zone:tracaZone,lot:rec.lot,dlc:rec.dlc,miseEnPlace:rec.miseEnPlace,retrait:rec.dlcJ14}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
                   setTracaNew(emptyTracaNew());
                   showToast("Mise en place enregistrée");
                 }}/>
