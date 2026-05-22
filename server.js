@@ -87,7 +87,10 @@ app.get("/api/status", (req, res) => {
 /* ─── Middleware requireAuth ─────────────────────── */
 const requireAuth = (req, res, next) => {
   const raw = req.signedCookies?.gl_session;
-  if (!raw) return res.status(401).json({ error: "Non connecté — veuillez vous connecter." });
+  if (!raw) {
+    console.warn(`⚠ Auth requis sur ${req.method} ${req.path} — cookie absent ou invalide`);
+    return res.status(401).json({ error: "Non connecté — veuillez vous connecter." });
+  }
   try {
     req.user = JSON.parse(raw);
     next();
@@ -142,15 +145,24 @@ const writeJSON  = (p, d)  => { try { writeFileSync(p, JSON.stringify(d, null, 2
 const PREFIX = "glacerie:";
 
 const storeGet = async (key) => {
-  if (USE_UPSTASH) return await upstash("GET", PREFIX + key);
+  if (USE_UPSTASH) {
+    try { return await upstash("GET", PREFIX + key); }
+    catch (e) { console.error(`Upstash GET failed for ${key}, fallback fichier:`, e.message); }
+  }
   return readJSON(STORE_PATH, {})[key] ?? null;
 };
 const storeSet = async (key, value) => {
-  if (USE_UPSTASH) { await upstash("SET", PREFIX + key, value); return; }
+  if (USE_UPSTASH) {
+    try { await upstash("SET", PREFIX + key, value); return; }
+    catch (e) { console.error(`Upstash SET failed for ${key}, fallback fichier:`, e.message); }
+  }
   const s = readJSON(STORE_PATH, {}); s[key] = value; writeJSON(STORE_PATH, s);
 };
 const storeDel = async (key) => {
-  if (USE_UPSTASH) { await upstash("DEL", PREFIX + key); return; }
+  if (USE_UPSTASH) {
+    try { await upstash("DEL", PREFIX + key); return; }
+    catch (e) { console.error(`Upstash DEL failed for ${key}, fallback fichier:`, e.message); }
+  }
   const s = readJSON(STORE_PATH, {}); delete s[key]; writeJSON(STORE_PATH, s);
 };
 const storeListKeys = async (prefix) => {
@@ -286,7 +298,7 @@ app.post("/api/dropbox", requireAuth, async (req, res) => {
     title:       title       || "Document",
     docType:     docType     || "other",
     week:        week        || "",
-    destination: destination || "responsable",   // "responsable" | "adjoint"
+    destination: destination || "responsable",
     author:      req.user.name,
     authorId:    req.user.id,
     createdAt:   new Date().toISOString(),
@@ -294,8 +306,12 @@ app.post("/api/dropbox", requireAuth, async (req, res) => {
   };
   try {
     await storeSet(id, JSON.stringify(entry));
+    console.log(`✓ Document enregistré : ${id} (${docType}) → ${destination} par ${req.user.name}`);
     res.json({ ok: true, id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error(`✗ Erreur enregistrement document ${id}:`, e.message);
+    res.status(500).json({ error: `Erreur stockage : ${e.message}` });
+  }
 });
 
 // GET /api/dropbox — liste des documents (sans pdfBase64)

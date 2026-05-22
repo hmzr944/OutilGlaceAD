@@ -798,21 +798,38 @@ export default function App(){
   /* ── Helper envoi PDF vers Documents ── */
   const sendToDropbox=useCallback(async(buildFn,docType,title,weekLbl,destination="responsable")=>{
     setPdfLoading(true);
+    // 1. Génération du PDF
+    let blob;
+    try{ blob=await buildFn(); }
+    catch(e){ console.error("PDF generation error:",e); showToast("Erreur génération PDF"); setPdfLoading(false); return; }
+    if(!blob){ showToast("Erreur génération PDF"); setPdfLoading(false); return; }
+    // 2. Conversion base64
+    let b64;
     try{
-      const blob=await buildFn();
-      if(!blob){showToast("Erreur génération PDF");setPdfLoading(false);return;}
       const ab=await blob.arrayBuffer();
       const bytes=new Uint8Array(ab);
       let bin="";
       for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
-      const b64=btoa(bin);
+      b64=btoa(bin);
+    }catch(e){ console.error("Base64 conversion error:",e); showToast("Erreur conversion PDF"); setPdfLoading(false); return; }
+    // 3. Envoi au serveur
+    try{
       const r=await fetch("/api/dropbox",{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({title,docType,week:weekLbl,pdfBase64:b64,destination}),
       });
-      if(r.ok) showToast(destination==="adjoint"?"Envoyé à l'espace Production":"Envoyé à l'espace Responsable");
-      else showToast("Erreur envoi documents");
-    }catch{showToast("Erreur envoi documents");}
+      if(r.ok){
+        showToast(destination==="adjoint"?"Envoyé à l'espace Production":"Envoyé à l'espace Responsable");
+      } else {
+        const err=await r.json().catch(()=>({}));
+        console.error("Dropbox upload failed:",r.status,err);
+        if(r.status===401) showToast("Session expirée — reconnectez-vous");
+        else showToast(err.error||`Erreur serveur (${r.status})`);
+      }
+    }catch(e){
+      console.error("Dropbox fetch error:",e);
+      showToast("Serveur inaccessible — relancez l'application");
+    }
     setPdfLoading(false);
   },[]);
 
