@@ -243,6 +243,18 @@ app.post("/api/storage/:key", requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/snapshot — toutes les données partagées en une requête (polling temps réel)
+app.get("/api/snapshot", requireAuth, async (req, res) => {
+  try {
+    const [inv, traca, temprec] = await Promise.all([
+      storeGet("ad9_inv").catch(()=>null),
+      storeGet("ad9_traca").catch(()=>null),
+      storeGet("ad9_temprec").catch(()=>null),
+    ]);
+    res.json({ inv, traca, temprec });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/history
 app.get("/api/history", requireAuth, async (req, res) => {
   try { res.json(await histGet(100)); }

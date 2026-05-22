@@ -820,6 +820,10 @@ export default function App(){
       });
       if(r.ok){
         showToast(destination==="adjoint"?"Envoyé à l'espace Production":"Envoyé à l'espace Responsable");
+        const typeLabels={livraison:"Bon de réception",inventaire:"État des stocks",tracabilite:"Fiche traçabilité",commande:"Bon de commande"};
+        const destLabel=destination==="adjoint"?"Espace Production":"Espace Responsable";
+        const he=await historyAPI.push({type:"document",label:`Document envoyé → ${destLabel}`,data:{title,docType,typeLabel:typeLabels[docType]||docType,week:weekLbl,destination}});
+        if(he) setHistEntries(prev=>[he,...prev]);
       } else {
         const err=await r.json().catch(()=>({}));
         console.error("Dropbox upload failed:",r.status,err);
@@ -1008,6 +1012,27 @@ AJUSTEMENTS — raisons`
   useEffect(()=>{if(tab==="configs")loadConfigs();},[tab]);
   const loadHistory=async()=>{setHistLoading(true);setHistEntries(await historyAPI.get());setHistLoading(false);};
   useEffect(()=>{if(tab==="historique")loadHistory();},[tab]);
+
+  /* ── Sync temps réel — polling toutes les 60s ── */
+  useEffect(()=>{
+    if(!loaded) return;
+    const sync=async()=>{
+      try{
+        const r=await fetch("/api/snapshot");
+        if(!r.ok) return;
+        const{inv,traca,temprec}=await r.json();
+        if(inv)    setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+        if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+        if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      }catch{}
+      try{
+        const h=await historyAPI.get();
+        setHistEntries(cur=>JSON.stringify(cur)===JSON.stringify(h)?cur:h);
+      }catch{}
+    };
+    const t=setInterval(sync,60_000);
+    return()=>clearInterval(t);
+  },[loaded]);
 
   /* ── Données dérivées ── */
   const sorbets  = RECIPES.filter(r=>r.type==="Sorbet");
@@ -2459,12 +2484,13 @@ AJUSTEMENTS — raisons`
             {/* Filtres par type */}
             <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
               {[
-                {id:"all",       l:"Tout"},
-                {id:"livraison", l:" Livraisons"},
-                {id:"commande",  l:" Commandes"},
-                {id:"tracabilite",l:" Traçabilité"},
-                {id:"temperature",l:" Températures"},
+                {id:"all",        l:"Tout"},
+                {id:"livraison",  l:"Livraisons"},
+                {id:"commande",   l:"Commandes"},
+                {id:"tracabilite",l:"Traçabilité"},
+                {id:"temperature",l:"Températures"},
                 {id:"inventaire", l:"Stock"},
+                {id:"document",   l:"Documents"},
               ].map(f=>(
                 <button key={f.id} onClick={()=>setHistFilterType(f.id)}
                   style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${histFilterType===f.id?G.copper:"transparent"}`,
@@ -2889,6 +2915,7 @@ function HistoryEntry({entry,onDelete}){
     tracabilite:{c:"#1A3A6A",bg:"rgba(26,58,106,0.08)", l:"Traçabilité"},
     temperature:{c:"#945208",bg:"rgba(148,82,8,0.08)",  l:"Température"},
     inventaire: {c:"#3A3A4A",bg:"rgba(58,58,74,0.07)",  l:"Stock"},
+    document:   {c:"#6B3FA0",bg:"rgba(107,63,160,0.08)",l:"Document"},
   };
   const conf=tC[entry.type]||{c:G.mid,bg:"rgba(90,74,56,0.06)",l:entry.type};
   const dateStr=new Date(entry.createdAt).toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
@@ -2921,6 +2948,13 @@ function HistoryEntry({entry,onDelete}){
     if(d.lot)   details.push(`Lot : ${d.lot}`);
     if(d.temp!==null&&d.temp!==undefined) details.push(`Température : ${d.temp}°C${d.alert?" — HORS NORME":""}`);
     if(d.heure) details.push(`Heure : ${d.heure}`);
+  }
+  if(entry.type==="document"&&entry.data){
+    const d=entry.data;
+    if(d.typeLabel) details.push(`Type : ${d.typeLabel}`);
+    if(d.title)     details.push(`Titre : ${d.title}`);
+    details.push(`Destination : ${d.destination==="adjoint"?"Espace Production":"Espace Responsable"}`);
+    if(d.week)      details.push(`Semaine : ${d.week}`);
   }
   const hasDetail=details.length>0||entry.data?.aiText;
   const ap=getAvatarProfile(entry.author||"Équipe");
