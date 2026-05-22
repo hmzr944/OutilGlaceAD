@@ -167,8 +167,10 @@ const storeDel = async (key) => {
 };
 const storeListKeys = async (prefix) => {
   if (USE_UPSTASH) {
-    const keys = await upstash("KEYS", PREFIX + prefix + "*");
-    return (keys || []).map(k => k.replace(PREFIX, ""));
+    try {
+      const keys = await upstash("KEYS", PREFIX + prefix + "*");
+      return (keys || []).map(k => k.replace(PREFIX, ""));
+    } catch (e) { console.error(`Upstash KEYS failed for ${prefix}, fallback fichier:`, e.message); }
   }
   return Object.keys(readJSON(STORE_PATH, {})).filter(k => k.startsWith(prefix));
 };
@@ -179,16 +181,20 @@ const MAX_HIST = 500;
 
 const histGet = async (limit = 100) => {
   if (USE_UPSTASH) {
-    const items = await upstash("LRANGE", HIST_KEY, 0, limit - 1);
-    return (items || []).map(i => { try { return JSON.parse(i); } catch { return null; } }).filter(Boolean);
+    try {
+      const items = await upstash("LRANGE", HIST_KEY, 0, limit - 1);
+      return (items || []).map(i => { try { return JSON.parse(i); } catch { return null; } }).filter(Boolean);
+    } catch (e) { console.error("Upstash LRANGE failed, fallback fichier:", e.message); }
   }
   return readJSON(HISTORY_PATH, []).slice(-limit).reverse();
 };
 const histPush = async (entry) => {
   if (USE_UPSTASH) {
-    await upstash("LPUSH", HIST_KEY, JSON.stringify(entry));
-    await upstash("LTRIM", HIST_KEY, 0, MAX_HIST - 1);
-    return;
+    try {
+      await upstash("LPUSH", HIST_KEY, JSON.stringify(entry));
+      await upstash("LTRIM", HIST_KEY, 0, MAX_HIST - 1);
+      return;
+    } catch (e) { console.error("Upstash LPUSH failed, fallback fichier:", e.message); }
   }
   const h = readJSON(HISTORY_PATH, []);
   h.push(entry);
@@ -197,11 +203,13 @@ const histPush = async (entry) => {
 };
 const histDelete = async (id) => {
   if (USE_UPSTASH) {
-    const items = await upstash("LRANGE", HIST_KEY, 0, -1);
-    const filtered = (items || []).filter(i => { try { return JSON.parse(i).id !== id; } catch { return true; } });
-    await upstash("DEL", HIST_KEY);
-    if (filtered.length) await upstash("RPUSH", HIST_KEY, ...filtered);
-    return;
+    try {
+      const items = await upstash("LRANGE", HIST_KEY, 0, -1);
+      const filtered = (items || []).filter(i => { try { return JSON.parse(i).id !== id; } catch { return true; } });
+      await upstash("DEL", HIST_KEY);
+      if (filtered.length) await upstash("RPUSH", HIST_KEY, ...filtered);
+      return;
+    } catch (e) { console.error("Upstash histDelete failed, fallback fichier:", e.message); }
   }
   const h = readJSON(HISTORY_PATH, []).filter(e => String(e.id) !== String(id));
   writeJSON(HISTORY_PATH, h);
