@@ -932,15 +932,18 @@ export default function App(){
   /* ── Génération IA ── */
   const generateOrder = async()=>{
     setAiLoading(true); setSuggestion(null); setAiText("");
+    let liveInv=inventory;
+    try{const r=await storage.get("ad9_inv");if(r?.value){const v=JSON.parse(r.value);liveInv=v;setInventory(cur=>JSON.stringify(cur)===JSON.stringify(v)?cur:v);}}catch{}
+    const liveEco=computeEco(snapshot,liveInv);
     const dbl=isDouble(weekOffset);
-    const c1=Object.fromEntries(RECIPES.map(r=>[r.id,smartOrder(r,inventory,eco,weather.coeff,season,dbl?3:7)]));
+    const c1=Object.fromEntries(RECIPES.map(r=>[r.id,smartOrder(r,liveInv,liveEco,weather.coeff,season,dbl?3:7)]));
     const c2=dbl?Object.fromEntries(RECIPES.map(r=>{
       const consumed=r.rate*weather.coeff*season*2;
-      const atC2=Math.max(0,totalZ(inventory[r.id])-consumed+c1[r.id].totalEq);
-      return[r.id,smartOrder(r,{[r.id]:{reserve:{demi:atC2,pleine:0},taxi:emptyZone(),boutique:emptyZone()}},eco,weather.coeff,season,4)];
+      const atC2=Math.max(0,totalZ(liveInv[r.id])-consumed+c1[r.id].totalEq);
+      return[r.id,smartOrder(r,{[r.id]:{reserve:{demi:atC2,pleine:0},taxi:emptyZone(),boutique:emptyZone()}},liveEco,weather.coeff,season,4)];
     })):null;
-    const invL =RECIPES.map(r=>{const i=inventory[r.id];return `${r.name}: R(${i.reserve.demi}D+${i.reserve.pleine}P) T(${i.taxi.demi}D+${i.taxi.pleine}P) B(${i.boutique.demi}D+${i.boutique.pleine}P)`;}).join("\n");
-    const ecoL =eco?RECIPES.filter(r=>eco[r.id]?.sold>0).map(r=>`${r.name}: ${eco[r.id].sold} vendus en ${eco[r.id].days}j`).join("\n"):"Pas de données.";
+    const invL =RECIPES.map(r=>{const i=liveInv[r.id];return `${r.name}: R(${i.reserve.demi}D+${i.reserve.pleine}P) T(${i.taxi.demi}D+${i.taxi.pleine}P) B(${i.boutique.demi}D+${i.boutique.pleine}P)`;}).join("\n");
+    const ecoL =liveEco?RECIPES.filter(r=>liveEco[r.id]?.sold>0).map(r=>`${r.name}: ${liveEco[r.id].sold} vendus en ${liveEco[r.id].days}j`).join("\n"):"Pas de données.";
     const metL =weather.days.map(d=>`${d.dow} ${d.tMax}°C ${d.label} x${d.coeff}`).join(" | ");
     const fmtC =cmd=>RECIPES.filter(r=>cmd[r.id].totalEq>0).map(r=>`${r.name}: ${cmd[r.id].demi}D+${cmd[r.id].pleine}P`).join("\n")||"Aucune";
     try{
@@ -1013,26 +1016,26 @@ AJUSTEMENTS — raisons`
   const loadHistory=async()=>{setHistLoading(true);setHistEntries(await historyAPI.get());setHistLoading(false);};
   useEffect(()=>{if(tab==="historique")loadHistory();},[tab]);
 
-  /* ── Sync temps réel — polling toutes les 60s ── */
+  /* ── Sync temps réel — polling toutes les 30s ── */
+  const syncNow = useCallback(async()=>{
+    try{
+      const r=await fetch("/api/snapshot");
+      if(!r.ok) return;
+      const{inv,traca,temprec}=await r.json();
+      if(inv)    setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+    }catch{}
+    try{
+      const h=await historyAPI.get();
+      setHistEntries(cur=>JSON.stringify(cur)===JSON.stringify(h)?cur:h);
+    }catch{}
+  },[]);
   useEffect(()=>{
     if(!loaded) return;
-    const sync=async()=>{
-      try{
-        const r=await fetch("/api/snapshot");
-        if(!r.ok) return;
-        const{inv,traca,temprec}=await r.json();
-        if(inv)    setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
-        if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
-        if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
-      }catch{}
-      try{
-        const h=await historyAPI.get();
-        setHistEntries(cur=>JSON.stringify(cur)===JSON.stringify(h)?cur:h);
-      }catch{}
-    };
-    const t=setInterval(sync,60_000);
+    const t=setInterval(syncNow,30_000);
     return()=>clearInterval(t);
-  },[loaded]);
+  },[loaded,syncNow]);
 
   /* ── Données dérivées ── */
   const sorbets  = RECIPES.filter(r=>r.type==="Sorbet");
@@ -1448,6 +1451,9 @@ AJUSTEMENTS — raisons`
         {tab==="boutique"&&user?.role==="responsable"&&(
           <div style={{animation:"fadein .28s ease"}}>
             <PageIntro title="Stock — Vue globale" desc="Lecture seule · Réserve · Taxi · Boutique"/>
+            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12,marginTop:-8}}>
+              <GBtn small label="Actualiser" onClick={syncNow}/>
+            </div>
 
             {/* Résumé 3 zones */}
             {(()=>{
@@ -1514,7 +1520,10 @@ AJUSTEMENTS — raisons`
         {tab==="boutique"&&user?.role!=="responsable"&&(
           <div style={{animation:"fadein .28s ease"}}>
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:13,fontWeight:700,color:G.dark,marginBottom:4}}>Boutique — Pozzetti en cours</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{fontSize:13,fontWeight:700,color:G.dark,marginBottom:4}}>Boutique — Pozzetti en cours</div>
+                <GBtn small label="Actualiser" onClick={syncNow}/>
+              </div>
               <div style={{fontSize:11,color:G.light}}>
                 Vue temps réel de ce qui est disponible à la vente. Partagée avec toute l'équipe.
               </div>
@@ -2074,12 +2083,15 @@ AJUSTEMENTS — raisons`
                 docType:"inventaire",title:`État des stocks — ${new Date().toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
               })}/>
               <GBtn primary label="Enregistrer dans le journal" onClick={async()=>{
+                // Sauvegarde immédiate du stock sur le serveur (pour la boutique + suggestions IA)
+                try { await storage.set("ad9_inv", JSON.stringify(inventory)); } catch {}
                 const summary=RECIPES.filter(r=>totalZ(inventory[r.id])>0)
                   .map(r=>({name:r.name,total:totalZ(inventory[r.id]),demi:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.demi||0),0),pleine:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.pleine||0),0)}));
                 const entry=await historyAPI.push({type:"inventaire",label:`Mise à jour stock — ${new Date().toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"})}`,author:user?.name||"Équipe",data:{totalGl,summary}});
                 if(entry){
                   setHistEntries(prev=>[entry,...prev]);
-                  showToast("Stock enregistré dans le journal ✓");
+                  showToast("Stock enregistré ✓");
+                  syncNow();
                 } else {
                   showToast("Erreur journal — reconnectez-vous");
                 }
