@@ -3958,6 +3958,9 @@ function DropboxTab({user, showToast}){
   const[docs,setDocs]=useState([]);
   const[loading,setLoading]=useState(false);
   const[filter,setFilter]=useState("all");
+  const[previewDoc,setPreviewDoc]=useState(null);   // doc object being previewed
+  const[previewUrl,setPreviewUrl]=useState(null);   // blob URL of the PDF
+  const[previewLoading,setPreviewLoading]=useState(false);
 
   const isResponsable = user?.role === "responsable";
   const isAdjoint     = user?.role === "adjoint";
@@ -3974,19 +3977,44 @@ function DropboxTab({user, showToast}){
   };
   useEffect(()=>{loadDocs();},[]);
 
+  /* Construit un blob URL à partir du base64 */
+  const buildBlobUrl=async(doc)=>{
+    const r=await fetch(`/api/dropbox/${doc.id}`);
+    const d=await r.json();
+    if(!d.pdfBase64) throw new Error("PDF introuvable");
+    const bytes=atob(d.pdfBase64);
+    const arr=new Uint8Array(bytes.length);
+    for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
+    return URL.createObjectURL(new Blob([arr],{type:"application/pdf"}));
+  };
+
   const download=async(doc)=>{
     try{
-      const r=await fetch(`/api/dropbox/${doc.id}`);
-      const d=await r.json();
-      if(!d.pdfBase64){showToast("PDF introuvable");return;}
-      const bytes=atob(d.pdfBase64);
-      const arr=new Uint8Array(bytes.length);
-      for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
-      const blob=new Blob([arr],{type:"application/pdf"});
-      const url=URL.createObjectURL(blob);
+      const url=await buildBlobUrl(doc);
       const a=Object.assign(document.createElement("a"),{href:url,download:`${doc.title}.pdf`});
-      document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url),5000);
     }catch{showToast("Erreur téléchargement");}
+  };
+
+  const preview=async(doc)=>{
+    setPreviewLoading(true);
+    setPreviewDoc(doc);
+    setPreviewUrl(null);
+    try{
+      const url=await buildBlobUrl(doc);
+      setPreviewUrl(url);
+    }catch{
+      showToast("Erreur de chargement du PDF");
+      setPreviewDoc(null);
+    }
+    setPreviewLoading(false);
+  };
+
+  const closePreview=()=>{
+    if(previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewDoc(null);
+    setPreviewUrl(null);
   };
 
   const deleteDoc=async(id)=>{
@@ -4005,10 +4033,43 @@ function DropboxTab({user, showToast}){
     boxShadow:active?`0 2px 10px ${color}44`:"none",
   });
 
+  /* ── MODAL PRÉVISUALISATION PDF ── */
+  const PreviewModal=previewDoc?(
+    <div style={{position:"fixed",inset:0,zIndex:990,background:"rgba(0,0,0,0.88)",
+      display:"flex",flexDirection:"column",animation:"fadein .2s ease"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
+        background:"rgba(0,0,0,0.55)",borderBottom:"1px solid rgba(255,255,255,0.1)",flexShrink:0}}>
+        <button onClick={closePreview}
+          style={{background:"rgba(255,255,255,0.12)",border:"none",color:"#fff",
+            width:34,height:34,borderRadius:"50%",fontSize:18,cursor:"pointer",
+            display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          ←
+        </button>
+        <div style={{flex:1,overflow:"hidden"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{previewDoc.title}</div>
+          <div style={{fontSize:9,color:"rgba(255,255,255,0.5)",marginTop:1}}>{previewDoc.author}</div>
+        </div>
+        <button onClick={()=>download(previewDoc)}
+          style={{background:`linear-gradient(135deg,${G.copperL},${G.copper})`,border:"none",color:"#fff",
+            padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",flexShrink:0}}>
+          Télécharger
+        </button>
+      </div>
+      {previewLoading
+        ? <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",
+            color:"rgba(255,255,255,0.55)",fontSize:12}}>
+            <span style={{animation:"pulse 1.4s infinite"}}>Chargement du document…</span>
+          </div>
+        : <iframe src={previewUrl} style={{flex:1,width:"100%",border:"none"}} title={previewDoc.title}/>
+      }
+    </div>
+  ):null;
+
   /* ── VUE ADJOINT : espace production uniquement ── */
   if(isAdjoint){
     return(
       <div style={{animation:"fadein .28s ease"}}>
+        {PreviewModal}
         <div style={{marginBottom:24,paddingBottom:18,borderBottom:`1px solid ${G.border}`}}>
           <div style={{fontSize:8,letterSpacing:4,color:"#3A3A4A",textTransform:"uppercase",marginBottom:8}}>Production</div>
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark,marginBottom:6}}>
@@ -4047,12 +4108,19 @@ function DropboxTab({user, showToast}){
                   {" · "}{new Date(doc.createdAt).toLocaleDateString("fr-FR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
                 </div>
               </div>
-              <button onClick={()=>download(doc)}
-                style={{background:"linear-gradient(135deg,#4A4A5E,#3A3A4A)",border:"none",color:"#fff",
-                  padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto",
-                  boxShadow:"0 2px 10px rgba(58,58,74,0.3)",flexShrink:0}}>
-                Télécharger
-              </button>
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <button onClick={()=>preview(doc)}
+                  style={{background:"rgba(58,58,74,0.08)",border:"1px solid rgba(58,58,74,0.2)",color:"#3A3A4A",
+                    padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto"}}>
+                  Voir
+                </button>
+                <button onClick={()=>download(doc)}
+                  style={{background:"linear-gradient(135deg,#4A4A5E,#3A3A4A)",border:"none",color:"#fff",
+                    padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto",
+                    boxShadow:"0 2px 10px rgba(58,58,74,0.3)"}}>
+                  Télécharger
+                </button>
+              </div>
             </div>
           </Card>
         ))}
@@ -4069,6 +4137,7 @@ function DropboxTab({user, showToast}){
 
   return(
     <div style={{animation:"fadein .28s ease"}}>
+      {PreviewModal}
 
       {/* En-tête espace responsable */}
       <div style={{marginBottom:24,paddingBottom:18,borderBottom:`1px solid ${G.border}`}}>
@@ -4145,6 +4214,11 @@ function DropboxTab({user, showToast}){
               </div>
             </div>
             <div style={{display:"flex",gap:6,flexShrink:0}}>
+              <button onClick={()=>preview(doc)}
+                style={{background:`rgba(140,60,16,0.08)`,border:`1px solid rgba(140,60,16,0.2)`,color:G.copper,
+                  padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto"}}>
+                Voir
+              </button>
               <button onClick={()=>download(doc)}
                 style={{background:`linear-gradient(135deg,${G.copperL},${G.copper})`,border:"none",color:"#fff",
                   padding:"7px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto",
