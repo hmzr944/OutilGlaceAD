@@ -794,6 +794,7 @@ export default function App(){
   const [configName,   setConfigName]   = useState("");
   const [storageWarning,setStorageWarning]=useState(false);
   const [sendDocPending,setSendDocPending]=useState(null); // {buildFn,docType,title,weekLbl}
+  const [lastSync,      setLastSync]      = useState(null);
 
   /* ── Helper envoi PDF vers Documents ── */
   const sendToDropbox=useCallback(async(buildFn,docType,title,weekLbl,destination="responsable")=>{
@@ -1016,7 +1017,7 @@ AJUSTEMENTS — raisons`
   const loadHistory=async()=>{setHistLoading(true);setHistEntries(await historyAPI.get());setHistLoading(false);};
   useEffect(()=>{if(tab==="historique")loadHistory();},[tab]);
 
-  /* ── Sync temps réel — polling toutes les 30s ── */
+  /* ── Sync temps réel — polling toutes les 15s ── */
   const syncNow = useCallback(async()=>{
     try{
       const r=await fetch("/api/snapshot");
@@ -1025,6 +1026,7 @@ AJUSTEMENTS — raisons`
       if(inv)    setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      setLastSync(new Date());
     }catch{}
     try{
       const h=await historyAPI.get();
@@ -1033,7 +1035,8 @@ AJUSTEMENTS — raisons`
   },[]);
   useEffect(()=>{
     if(!loaded) return;
-    const t=setInterval(syncNow,30_000);
+    syncNow(); // sync immédiat au chargement
+    const t=setInterval(syncNow,15_000);
     return()=>clearInterval(t);
   },[loaded,syncNow]);
 
@@ -1255,7 +1258,7 @@ AJUSTEMENTS — raisons`
           <div className="tabs-scroll" style={{display:"flex",gap:4,overflowX:"auto",paddingBottom:12,paddingRight:4}}>
             {[
               {id:"accueil",    l:"Accueil"},
-              {id:"boutique",   l:user?.role==="responsable"?"Stock":"Boutique"},
+              {id:"boutique",   l:user?.role==="responsable"?"Dashboard":"Boutique"},
               {id:"livraison",  l:"Livraison"},
               {id:"inventaire", l:"Stock global"},
               {id:"commande",   l:"Commande"},
@@ -1447,37 +1450,106 @@ AJUSTEMENTS — raisons`
           </div>
         )}
 
-        {/* ══ BOUTIQUE / STOCK ══ */}
+        {/* ══ DASHBOARD STOCK (responsable) ══ */}
         {tab==="boutique"&&user?.role==="responsable"&&(
           <div style={{animation:"fadein .28s ease"}}>
-            <PageIntro title="Stock — Vue globale" desc="Lecture seule · Réserve · Taxi · Boutique"/>
-            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12,marginTop:-8}}>
-              <GBtn small label="Actualiser" onClick={syncNow}/>
+
+            {/* ── En-tête dashboard ── */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+              <div>
+                <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark}}>Dashboard stock</div>
+                <div style={{fontSize:11,color:G.light,marginTop:2}}>
+                  {lastSync
+                    ? `Actualisé à ${lastSync.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+                    : "Chargement…"}
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,
+                  background:"rgba(30,94,50,0.08)",border:"1px solid rgba(30,94,50,0.2)"}}>
+                  <div style={{position:"relative",width:7,height:7,flexShrink:0}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:G.ok,position:"absolute"}}/>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:G.ok,position:"absolute",
+                      animation:"dotping 2.4s ease-out infinite"}}/>
+                  </div>
+                  <span style={{fontSize:8,color:G.ok,fontWeight:700,letterSpacing:.5}}>LIVE</span>
+                </div>
+                <GBtn small label="↺ Sync" onClick={syncNow}/>
+              </div>
             </div>
 
-            {/* Résumé 3 zones */}
+            {/* ── Alertes ── */}
+            {(()=>{
+              const ep = RECIPES.filter(r=>totalZ(inventory[r.id])===0);
+              const lo = RECIPES.filter(r=>{const t=totalZ(inventory[r.id]);return t>0&&t<=3;});
+              if(!ep.length&&!lo.length) return(
+                <div style={{padding:"10px 16px",borderRadius:12,marginBottom:16,
+                  background:"rgba(30,94,50,0.07)",border:"1px solid rgba(30,94,50,0.18)",
+                  display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:16}}>✓</span>
+                  <span style={{fontSize:11,color:G.ok,fontWeight:500}}>Tous les stocks sont opérationnels</span>
+                </div>
+              );
+              return(
+                <div style={{marginBottom:16,display:"flex",flexDirection:"column",gap:8}}>
+                  {ep.length>0&&(
+                    <div style={{padding:"10px 16px",borderRadius:12,
+                      background:G.dangerBg,border:`1px solid rgba(122,16,8,0.22)`}}>
+                      <div style={{fontSize:8,fontWeight:700,color:G.danger,letterSpacing:1.5,
+                        textTransform:"uppercase",marginBottom:5}}>
+                        Épuisés — {ep.length} recette{ep.length>1?"s":""}
+                      </div>
+                      <div style={{fontSize:11,color:G.danger,lineHeight:1.6}}>
+                        {ep.map(r=>r.name).join(" · ")}
+                      </div>
+                    </div>
+                  )}
+                  {lo.length>0&&(
+                    <div style={{padding:"10px 16px",borderRadius:12,
+                      background:G.warnBg,border:`1px solid rgba(148,82,8,0.22)`}}>
+                      <div style={{fontSize:8,fontWeight:700,color:G.warn,letterSpacing:1.5,
+                        textTransform:"uppercase",marginBottom:5}}>
+                        Stock bas — {lo.length} recette{lo.length>1?"s":""}
+                      </div>
+                      <div style={{fontSize:11,color:G.warn,lineHeight:1.6}}>
+                        {lo.map(r=>r.name).join(" · ")}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* ── Résumé 3 zones ── */}
             {(()=>{
               const totals = ZONES.map(z=>({
                 ...z,
                 total: RECIPES.reduce((s,r)=>s+zoneDemi(inventory[r.id],z.id),0),
-                dispo: RECIPES.filter(r=>zoneDemi(inventory[r.id],z.id)>2).length,
                 vide:  RECIPES.filter(r=>zoneDemi(inventory[r.id],z.id)===0).length,
+                low:   RECIPES.filter(r=>{const q=zoneDemi(inventory[r.id],z.id);return q>0&&q<=2;}).length,
+                ok:    RECIPES.filter(r=>zoneDemi(inventory[r.id],z.id)>2).length,
               }));
               return(
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:20}}>
                   {totals.map(z=>(
                     <Card key={z.id} style={{padding:"14px 10px",textAlign:"center"}}>
-                      <div style={{fontSize:9,fontWeight:700,color:G.copper,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>{z.label}</div>
-                      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:300,color:G.dark,lineHeight:1}}>{z.total}</div>
-                      <div style={{fontSize:8,color:G.light,marginTop:4}}>demi-eq total</div>
-                      <div style={{marginTop:6,fontSize:8,color:G.danger}}>{z.vide} épuisé{z.vide>1?"s":""}</div>
+                      <div style={{fontSize:8,fontWeight:700,color:G.copper,textTransform:"uppercase",
+                        letterSpacing:.5,marginBottom:6}}>{z.label}</div>
+                      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:300,
+                        color:z.vide>4?G.danger:z.low>4?G.warn:G.dark,lineHeight:1}}>{z.total}</div>
+                      <div style={{fontSize:8,color:G.light,marginTop:3}}>demi-eq</div>
+                      <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:3}}>
+                        {z.vide>0&&<div style={{fontSize:8,color:G.danger,fontWeight:600}}>{z.vide} épuisé{z.vide>1?"s":""}</div>}
+                        {z.low>0&&<div style={{fontSize:8,color:G.warn,fontWeight:600}}>{z.low} bas</div>}
+                        {z.ok>0&&<div style={{fontSize:8,color:G.ok}}>{z.ok} OK</div>}
+                      </div>
                     </Card>
                   ))}
                 </div>
               );
             })()}
 
-            {/* Tableau par recette — les 3 zones */}
+            {/* ── Détail recettes ── */}
             {["Sorbet","Glace"].map(type=>(
               <div key={type} style={{marginBottom:24}}>
                 <div style={{fontSize:10,fontWeight:700,color:G.copper,textTransform:"uppercase",
@@ -1485,27 +1557,35 @@ AJUSTEMENTS — raisons`
                   {type}s
                 </div>
                 {RECIPES.filter(r=>r.type===type).map(r=>{
-                  const zones = ZONES.map(z=>({...z, qty:zoneDemi(inventory[r.id],z.id)}));
+                  const zones    = ZONES.map(z=>({...z,qty:zoneDemi(inventory[r.id],z.id)}));
                   const totalQty = zones.reduce((s,z)=>s+z.qty,0);
-                  const alert = totalQty===0 ? "danger" : totalQty<=3 ? "warn" : "ok";
-                  const alertColor = {danger:G.danger, warn:G.warn, ok:G.ok}[alert];
+                  const alertColor = totalQty===0?G.danger:totalQty<=3?G.warn:G.ok;
+                  const pct      = Math.min(1, totalQty/12);
                   return(
                     <div key={r.id} style={{padding:"12px 14px",borderRadius:12,marginBottom:8,
                       background:"rgba(255,251,246,0.7)",border:`1px solid ${G.border}`,
                       borderLeft:`4px solid ${alertColor}`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                         <div style={{fontSize:12,fontWeight:600,color:G.dark}}>{r.name}</div>
-                        <div style={{fontSize:9,fontWeight:700,color:alertColor}}>
-                          {totalQty} total
-                        </div>
+                        <span style={{fontSize:11,fontWeight:700,color:alertColor}}>{totalQty} demi-eq</span>
+                      </div>
+                      {/* Barre de stock globale */}
+                      <div style={{height:3,background:"rgba(0,0,0,0.07)",borderRadius:2,overflow:"hidden",marginBottom:10}}>
+                        <div style={{height:"100%",borderRadius:2,background:alertColor,
+                          width:`${Math.max(pct*100,totalQty>0?4:0)}%`,transition:"width .5s ease"}}/>
                       </div>
                       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
                         {zones.map(z=>(
-                          <div key={z.id} style={{textAlign:"center",padding:"6px 4px",borderRadius:8,
-                            background:z.qty===0?"rgba(122,16,8,0.05)":"rgba(140,60,16,0.04)"}}>
-                            <div style={{fontSize:8,color:G.light,marginBottom:2}}>{z.label}</div>
+                          <div key={z.id} style={{textAlign:"center",padding:"7px 4px",borderRadius:8,
+                            background:z.qty===0?"rgba(122,16,8,0.06)":z.qty<=2?"rgba(148,82,8,0.05)":"rgba(140,60,16,0.03)"}}>
+                            <div style={{fontSize:8,color:G.light,marginBottom:3}}>{z.label}</div>
                             <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:300,
                               color:z.qty===0?G.danger:z.qty<=1?G.warn:G.dark,lineHeight:1}}>{z.qty}</div>
+                            <div style={{fontSize:7,color:G.light,marginTop:2}}>
+                              {inventory[r.id]?.[z.id]?.demi>0&&`${inventory[r.id][z.id].demi}D`}
+                              {inventory[r.id]?.[z.id]?.demi>0&&inventory[r.id]?.[z.id]?.pleine>0&&" "}
+                              {inventory[r.id]?.[z.id]?.pleine>0&&`${inventory[r.id][z.id].pleine}P`}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1514,18 +1594,70 @@ AJUSTEMENTS — raisons`
                 })}
               </div>
             ))}
+
+            {/* ── Journal récent ── */}
+            {histEntries.length>0&&(
+              <div style={{marginTop:4}}>
+                <div style={{fontSize:10,fontWeight:700,color:G.copper,textTransform:"uppercase",
+                  letterSpacing:1,marginBottom:12,paddingBottom:8,borderBottom:`1px solid ${G.border}`,
+                  display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>Journal récent</span>
+                  <button onClick={()=>setTab("historique")} style={{background:"none",border:"none",
+                    color:G.copper,fontSize:9,cursor:"pointer",textDecoration:"underline",minHeight:"auto",padding:0}}>
+                    Voir tout →
+                  </button>
+                </div>
+                {histEntries.slice(0,5).map(e=>{
+                  const typeColor = e.type==="livraison"?G.ok:e.type==="inventaire"?"#2A508E":e.type==="document"?"#6B3FA0":G.copper;
+                  const typeBg   = e.type==="livraison"?"rgba(30,94,50,0.09)":e.type==="inventaire"?"rgba(42,80,142,0.09)":e.type==="document"?"rgba(107,63,160,0.09)":"rgba(140,60,16,0.07)";
+                  return(
+                    <div key={e.id} style={{padding:"10px 14px",borderRadius:10,marginBottom:8,
+                      background:"rgba(255,251,246,0.7)",border:`1px solid ${G.border}`,
+                      display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:11,fontWeight:600,color:G.dark,
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.label}</div>
+                        <div style={{fontSize:9,color:G.light,marginTop:2}}>
+                          {e.author&&`${e.author} · `}
+                          {new Date(e.createdAt).toLocaleDateString("fr-FR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                        </div>
+                      </div>
+                      <div style={{padding:"3px 8px",borderRadius:10,fontSize:8,fontWeight:700,
+                        flexShrink:0,background:typeBg,color:typeColor,whiteSpace:"nowrap"}}>
+                        {e.type}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
         {tab==="boutique"&&user?.role!=="responsable"&&(
           <div style={{animation:"fadein .28s ease"}}>
             <div style={{marginBottom:20}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div style={{fontSize:13,fontWeight:700,color:G.dark,marginBottom:4}}>Boutique — Pozzetti en cours</div>
-                <GBtn small label="Actualiser" onClick={syncNow}/>
-              </div>
-              <div style={{fontSize:11,color:G.light}}>
-                Vue temps réel de ce qui est disponible à la vente. Partagée avec toute l'équipe.
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:G.dark,marginBottom:3}}>Boutique — Pozzetti en cours</div>
+                  <div style={{fontSize:10,color:G.light}}>
+                    {lastSync
+                      ? `Actualisé à ${lastSync.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+                      : "Synchronisation en cours…"}
+                  </div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,
+                    background:"rgba(30,94,50,0.08)",border:"1px solid rgba(30,94,50,0.2)"}}>
+                    <div style={{position:"relative",width:6,height:6,flexShrink:0}}>
+                      <div style={{width:6,height:6,borderRadius:"50%",background:G.ok,position:"absolute"}}/>
+                      <div style={{width:6,height:6,borderRadius:"50%",background:G.ok,position:"absolute",
+                        animation:"dotping 2.4s ease-out infinite"}}/>
+                    </div>
+                    <span style={{fontSize:8,color:G.ok,fontWeight:700}}>LIVE</span>
+                  </div>
+                  <GBtn small label="↺" onClick={syncNow}/>
+                </div>
               </div>
             </div>
 
