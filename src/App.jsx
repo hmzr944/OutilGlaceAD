@@ -688,6 +688,8 @@ const CSS = `
   @keyframes glow       {0%,100%{box-shadow:0 0 0 0 rgba(140,60,16,0)}50%{box-shadow:0 0 12px 2px rgba(140,60,16,0.15)}}
   @keyframes scanbeam   {0%{top:-2px;opacity:.9}100%{top:100%;opacity:0}}
   @keyframes dotping    {0%{transform:scale(1);opacity:1}70%{transform:scale(2.2);opacity:0}100%{transform:scale(1);opacity:0}}
+  @keyframes drawerUp   {from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+  @keyframes fabIn      {from{opacity:0;transform:translateY(10px) scale(.9)}to{opacity:1;transform:none}}
 
   /* ── Interactions globales ── */
   button,input,select,textarea{font-family:inherit;-webkit-font-smoothing:antialiased}
@@ -795,6 +797,10 @@ export default function App(){
   const [storageWarning,setStorageWarning]=useState(false);
   const [sendDocPending,setSendDocPending]=useState(null); // {buildFn,docType,title,weekLbl}
   const [lastSync,      setLastSync]      = useState(null);
+  const [plusOpen,      setPlusOpen]      = useState(false);
+  const [fabOpen,       setFabOpen]       = useState(false);
+  const [livWizardStep, setLivWizardStep] = useState(1); // 1=qté+temp, 2=scan, 3=récap
+  const [dashSubTab,    setDashSubTab]    = useState("apercu"); // apercu|alertes|zones|recettes
 
   /* ── Helper envoi PDF vers Documents ── */
   const sendToDropbox=useCallback(async(buildFn,docType,title,weekLbl,destination="responsable")=>{
@@ -1136,6 +1142,31 @@ AJUSTEMENTS — raisons`
     <div style={{minHeight:"100vh",background:G.bg,backgroundAttachment:"fixed",fontFamily:"'Inter',sans-serif",color:G.dark}}>
       <style>{CSS}</style>
 
+      {/* BADGE SYNC — coin supérieur droit fixe */}
+      {user&&(()=>{
+        const syncing=[invStatus,tracaStatus,tempRecStatus].some(s=>s==="saving");
+        const offline=storageWarning;
+        const state=offline?"offline":syncing?"syncing":"synced";
+        const cfg={
+          syncing:{l:"Synchro…", c:G.warn,   bg:G.warnBg,   icon:"⏳"},
+          synced: {l:"À jour",   c:G.ok,     bg:G.okBg,     icon:"✓"},
+          offline:{l:"Hors ligne",c:G.danger, bg:G.dangerBg, icon:"⚠"},
+        }[state];
+        return(
+          <div style={{
+            position:"fixed",top:12,right:12,zIndex:910,
+            padding:"4px 10px",borderRadius:20,
+            background:cfg.bg,border:`1px solid ${cfg.c}30`,
+            display:"flex",alignItems:"center",gap:5,
+            fontSize:9,fontWeight:600,color:cfg.c,
+            pointerEvents:"none",
+          }}>
+            <span style={{animation:state==="syncing"?"pulse 1s infinite":undefined}}>{cfg.icon}</span>
+            {cfg.l}
+          </div>
+        );
+      })()}
+
       {/* TOAST */}
       {toast&&(
         <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",
@@ -1163,6 +1194,47 @@ AJUSTEMENTS — raisons`
       )}
 
       {/* Onboarding — premier lancement */}
+      {/* ── FAB — Bouton flottant actions rapides ── */}
+      {user&&(
+        <div style={{position:"fixed",bottom:24,right:20,zIndex:990,display:"flex",flexDirection:"column-reverse",alignItems:"flex-end",gap:10}}>
+          {fabOpen&&(
+            <>
+              <div onClick={()=>setFabOpen(false)} style={{position:"fixed",inset:0,zIndex:-1}}/>
+              {[
+                {label:"Réception rapide", icon:"📦", action:()=>{setTab("livraison");setFabOpen(false);setLivWizardStep(1);}},
+                {label:"Scanner étiquette",icon:"📷", action:()=>{setTab("livraison");setLivWizardStep(2);setScanTarget({id:RECIPES[0].id,mode:"livraison"});setFabOpen(false);}},
+                {label:"Traçabilité",      icon:"📋", action:()=>{setTab("tracabilite");setFabOpen(false);}},
+                {label:"Commande IA",      icon:"🤖", action:()=>{setTab("commande");setFabOpen(false);}},
+              ].map((a,i)=>(
+                <button key={i} onClick={a.action} style={{
+                  display:"flex",alignItems:"center",gap:10,
+                  padding:"10px 18px",borderRadius:28,
+                  background:G.glassS,backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",
+                  border:`1px solid ${G.border}`,
+                  boxShadow:"0 4px 20px rgba(70,32,8,0.15)",
+                  fontSize:12,color:G.dark,cursor:"pointer",
+                  minHeight:"auto",whiteSpace:"nowrap",
+                  animation:`fabIn .18s ease both ${i*.06}s`,
+                }}>
+                  <span style={{fontSize:16}}>{a.icon}</span>
+                  <span style={{fontWeight:500}}>{a.label}</span>
+                </button>
+              ))}
+            </>
+          )}
+          <button onClick={()=>setFabOpen(p=>!p)} style={{
+            width:56,height:56,borderRadius:"50%",
+            background:`linear-gradient(135deg,${G.copperL},${G.copper})`,
+            border:"none",color:"#fff",fontSize:26,cursor:"pointer",
+            boxShadow:"0 6px 24px rgba(140,60,16,0.5)",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            transform:fabOpen?"rotate(45deg)":"rotate(0deg)",
+            transition:"transform .25s cubic-bezier(.4,0,.2,1)",
+            minHeight:"auto",
+          }}>+</button>
+        </div>
+      )}
+
       {showOnboarding&&(
         <OnboardingModal
           initName={author} initColor={avatarColor} initShape={avatarShape} initAnim={avatarAnim}
@@ -1253,55 +1325,123 @@ AJUSTEMENTS — raisons`
             </div>
           </div>
 
-          {/* Navigation — pills avec icônes + dégradé scroll */}
-          <div style={{position:"relative"}}>
-          <div className="tabs-scroll" style={{display:"flex",gap:4,overflowX:"auto",paddingBottom:12,paddingRight:4}}>
-            {[
-              {id:"accueil",    l:"Accueil"},
-              {id:"boutique",   l:user?.role==="responsable"?"Dashboard":"Boutique"},
-              {id:"livraison",  l:"Livraison"},
-              {id:"inventaire", l:"Stock global"},
-              {id:"commande",   l:"Commande"},
-              {id:"tracabilite",l:"Traçabilité"},
-              {id:"documents",  l:"Documents"},
-              {id:"configs",    l:"Configs"},
-              {id:"historique", l:"Journal"},
-            ].filter(t=>canAccess(t.id)).map(t=>(
-              <button key={t.id} className="tab-btn" onClick={()=>setTab(t.id)} style={{
-                background: tab===t.id
-                  ? `linear-gradient(135deg,${G.copperL},${G.copper})`
-                  : "rgba(140,60,16,0.055)",
-                border: `1px solid ${tab===t.id ? G.copper : "transparent"}`,
-                borderRadius: 22,
-                color: tab===t.id ? "#fff" : G.light,
-                padding: "7px 16px",
-                fontSize: 11,
-                letterSpacing: 0,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                minHeight: "auto",
-                fontWeight: tab===t.id ? 600 : 400,
-                flexShrink: 0,
-                transition: "all .22s cubic-bezier(.4,0,.2,1)",
-                boxShadow: tab===t.id
-                  ? "0 4px 16px rgba(140,60,16,0.35),0 1px 4px rgba(140,60,16,0.2)"
-                  : "none",
-                transform: tab===t.id ? "translateY(-1px)" : "none",
-              }}>
-                {t.l}
-              </button>
-            ))}
-          </div>
-          {/* Dégradé indicateur scroll → */}
-          <div style={{position:"absolute",right:0,top:0,bottom:12,width:32,pointerEvents:"none",
-            background:"linear-gradient(to right,transparent,rgba(250,244,236,0.95))",
-            borderRadius:"0 8px 8px 0"}}/>
-          </div>{/* /position:relative */}
+          {/* Navigation — 3 onglets principaux + drawer Plus */}
+          {(()=>{
+            const ctx = getDayContext();
+            const ctxTab = ctx?.tab;
+            const stockTab = "boutique";
+            const isMain = tab==="accueil" || tab===stockTab || (ctxTab && tab===ctxTab);
+            const plusTabs = [
+              {id:"livraison",   l:"Livraison"},
+              {id:"inventaire",  l:"Stock global"},
+              {id:"commande",    l:"Commande"},
+              {id:"tracabilite", l:"Traçabilité"},
+              {id:"documents",   l:"Documents"},
+              {id:"historique",  l:"Journal"},
+              {id:"configs",     l:"Configs"},
+              {id:"accueil",     l:"Accueil"},
+            ].filter(t=>canAccess(t.id));
+
+            const navBtn=(label,active,onClick)=>(
+              <button onClick={onClick} style={{
+                flex:1, padding:"8px 6px", borderRadius:20, cursor:"pointer",
+                background: active ? `linear-gradient(135deg,${G.copperL},${G.copper})` : "rgba(140,60,16,0.055)",
+                border: `1px solid ${active ? G.copper : "transparent"}`,
+                color: active ? "#fff" : G.light, fontSize:11, fontWeight:active?600:400,
+                minHeight:"auto", whiteSpace:"nowrap", flexShrink:0,
+                boxShadow: active ? "0 4px 16px rgba(140,60,16,0.35)" : "none",
+                transition:"all .22s cubic-bezier(.4,0,.2,1)",
+                transform: active ? "translateY(-1px)" : "none",
+              }}>{label}</button>
+            );
+
+            return(
+              <>
+                <div style={{display:"flex",gap:6,paddingBottom:12}}>
+                  {navBtn("Aujourd'hui", ctxTab ? tab===ctxTab : tab==="accueil",
+                    ()=>{ if(ctxTab&&canAccess(ctxTab))setTab(ctxTab); else setTab("accueil"); })}
+                  {canAccess(stockTab)&&navBtn(
+                    user?.role==="responsable"?"Dashboard":"Stock",
+                    tab===stockTab, ()=>setTab(stockTab))}
+                  <button onClick={()=>setPlusOpen(true)} style={{
+                    flex:1, padding:"8px 6px", borderRadius:20, cursor:"pointer",
+                    background: !isMain ? `linear-gradient(135deg,${G.copperL},${G.copper})` : "rgba(140,60,16,0.055)",
+                    border: `1px solid ${!isMain ? G.copper : "transparent"}`,
+                    color: !isMain ? "#fff" : G.light, fontSize:11, fontWeight:!isMain?600:400,
+                    minHeight:"auto", whiteSpace:"nowrap",
+                    boxShadow: !isMain ? "0 4px 16px rgba(140,60,16,0.35)" : "none",
+                    transition:"all .22s cubic-bezier(.4,0,.2,1)",
+                    transform: !isMain ? "translateY(-1px)" : "none",
+                  }}>Plus {!isMain?`— ${plusTabs.find(t=>t.id===tab)?.l||""}`:""} ▾</button>
+                </div>
+
+                {/* Drawer Plus */}
+                {plusOpen&&(<>
+                  <div onClick={()=>setPlusOpen(false)} style={{
+                    position:"fixed",inset:0,zIndex:800,
+                    background:"rgba(22,14,6,0.35)",backdropFilter:"blur(2px)"
+                  }}/>
+                  <div style={{
+                    position:"fixed",bottom:0,left:0,right:0,zIndex:900,
+                    background:G.glassS,backdropFilter:G.blur,
+                    borderRadius:"20px 20px 0 0",
+                    boxShadow:"0 -8px 40px rgba(70,32,8,0.2)",
+                    padding:"16px 20px 40px",
+                    animation:"drawerUp .22s ease",
+                  }}>
+                    <div style={{width:36,height:3,background:G.border,borderRadius:2,margin:"0 auto 16px",opacity:.5}}/>
+                    <div style={{fontSize:8,letterSpacing:3,color:G.light,textTransform:"uppercase",marginBottom:12}}>Navigation</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      {plusTabs.map(t=>(
+                        <button key={t.id} onClick={()=>{setTab(t.id);setPlusOpen(false);}} style={{
+                          padding:"12px 14px",borderRadius:12,textAlign:"left",
+                          background: tab===t.id?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.8)",
+                          border:`1px solid ${tab===t.id?G.copper:G.border}`,
+                          color: tab===t.id?"#fff":G.dark,
+                          fontSize:12,fontWeight:tab===t.id?600:400,
+                          cursor:"pointer",minHeight:"auto",transition:"all .18s",
+                        }}>
+                          {t.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>)}
+              </>
+            );
+          })()}
         </div>
       </div>
 
       {/* BODY */}
-      <div style={{padding:"24px 20px 64px",maxWidth:640,margin:"0 auto"}}>
+      <div style={{padding:"24px 20px 80px",maxWidth:640,margin:"0 auto"}}>
+
+        {/* ── Bannière de contexte du jour ── */}
+        {(()=>{
+          const ctx=getDayContext();
+          if(!ctx||!user) return null;
+          return(
+            <div style={{
+              marginBottom:16,padding:"10px 14px",borderRadius:12,
+              background:`${ctx.color}12`,border:`1px solid ${ctx.color}25`,
+              display:"flex",alignItems:"center",gap:10,
+            }}>
+              <span style={{fontSize:14,flexShrink:0}}>📍</span>
+              <div style={{flex:1,minWidth:0,fontSize:11,color:ctx.color,fontWeight:600,lineHeight:1.5}}>
+                {ctx.txt}
+              </div>
+              {tab!==ctx.tab&&canAccess(ctx.tab)&&(
+                <button onClick={()=>setTab(ctx.tab)} style={{
+                  background:ctx.color,border:"none",color:"#fff",
+                  padding:"6px 12px",borderRadius:8,fontSize:10,fontWeight:600,
+                  cursor:"pointer",whiteSpace:"nowrap",minHeight:"auto",flexShrink:0,
+                }}>
+                  Y aller →
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ══ ACCUEIL ══ */}
         {tab==="accueil"&&(
@@ -1455,10 +1595,10 @@ AJUSTEMENTS — raisons`
           <div style={{animation:"fadein .28s ease"}}>
 
             {/* ── En-tête dashboard ── */}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <div>
                 <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark}}>Dashboard stock</div>
-                <div style={{fontSize:11,color:G.light,marginTop:2}}>
+                <div style={{fontSize:10,color:G.light,marginTop:2}}>
                   {lastSync
                     ? `Actualisé à ${lastSync.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
                     : "Chargement…"}
@@ -1474,9 +1614,34 @@ AJUSTEMENTS — raisons`
                   </div>
                   <span style={{fontSize:8,color:G.ok,fontWeight:700,letterSpacing:.5}}>LIVE</span>
                 </div>
-                <GBtn small label="↺ Sync" onClick={syncNow}/>
+                <GBtn small label="↺" onClick={syncNow}/>
               </div>
             </div>
+
+            {/* ── Sous-navigation dashboard ── */}
+            <div style={{display:"flex",gap:0,marginBottom:16,borderRadius:10,overflow:"hidden",border:`1px solid ${G.border}`}}>
+              {[
+                {id:"apercu",    l:"Aperçu"},
+                {id:"alertes",   l:"Alertes"},
+                {id:"zones",     l:"Par zone"},
+                {id:"recettes",  l:"Recettes"},
+              ].map((s,i,arr)=>(
+                <button key={s.id} onClick={()=>setDashSubTab(s.id)} style={{
+                  flex:1,padding:"9px 4px",
+                  background:dashSubTab===s.id?G.copper:"rgba(255,255,255,0.45)",
+                  backdropFilter:"blur(8px)",
+                  border:"none",borderRight:i<arr.length-1?`1px solid ${G.border}`:"none",
+                  color:dashSubTab===s.id?"#fff":G.mid,
+                  fontSize:10,fontWeight:dashSubTab===s.id?600:400,
+                  cursor:"pointer",transition:"all .15s",minHeight:"auto",
+                }}>
+                  {s.l}
+                </button>
+              ))}
+            </div>
+
+            {/* ══ VUE APERÇU ══ */}
+            {dashSubTab==="apercu"&&(<>
 
             {/* ── Alertes ── */}
             {(()=>{
@@ -1631,6 +1796,154 @@ AJUSTEMENTS — raisons`
                 })}
               </div>
             )}
+            </>)} {/* fin apercu */}
+
+            {/* ══ VUE ALERTES ══ */}
+            {dashSubTab==="alertes"&&(<>
+              {(()=>{
+                const ep=RECIPES.filter(r=>totalZ(inventory[r.id])===0);
+                const lo=RECIPES.filter(r=>{const t=totalZ(inventory[r.id]);return t>0&&t<=3;});
+                const tempWarnRecs=tempRecs.filter(r=>r.temp!==null&&r.temp>-18);
+                if(!ep.length&&!lo.length&&!tempWarnRecs.length) return(
+                  <div style={{textAlign:"center",padding:"48px 0",fontFamily:"'Cormorant Garamond',serif",
+                    fontSize:18,color:G.ok,fontWeight:300}}>
+                    ✓ Aucune alerte active
+                  </div>
+                );
+                return(<>
+                  {ep.length>0&&(<>
+                    <div style={{fontSize:9,fontWeight:700,color:G.danger,letterSpacing:1.5,textTransform:"uppercase",marginBottom:10}}>
+                      Épuisés — {ep.length}
+                    </div>
+                    {ep.map(r=>(
+                      <div key={r.id} style={{padding:"12px 16px",borderRadius:12,marginBottom:8,
+                        background:G.dangerBg,border:`1px solid rgba(122,16,8,0.2)`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{fontSize:12,fontWeight:600,color:G.danger}}>{r.name}</div>
+                        <div style={{fontSize:9,color:G.danger}}>0 demi-eq</div>
+                      </div>
+                    ))}
+                  </>)}
+                  {lo.length>0&&(<>
+                    <div style={{fontSize:9,fontWeight:700,color:G.warn,letterSpacing:1.5,textTransform:"uppercase",marginBottom:10,marginTop:ep.length>0?16:0}}>
+                      Stock bas — {lo.length}
+                    </div>
+                    {lo.map(r=>(
+                      <div key={r.id} style={{padding:"12px 16px",borderRadius:12,marginBottom:8,
+                        background:G.warnBg,border:`1px solid rgba(148,82,8,0.2)`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{fontSize:12,fontWeight:600,color:G.warn}}>{r.name}</div>
+                        <div style={{fontSize:9,color:G.warn}}>{totalZ(inventory[r.id])} demi-eq</div>
+                      </div>
+                    ))}
+                  </>)}
+                  {tempWarnRecs.length>0&&(<>
+                    <div style={{fontSize:9,fontWeight:700,color:G.danger,letterSpacing:1.5,textTransform:"uppercase",marginBottom:10,marginTop:16}}>
+                      Températures hors norme — {tempWarnRecs.length}
+                    </div>
+                    {tempWarnRecs.slice(0,5).map(r=>(
+                      <div key={r.id} style={{padding:"12px 16px",borderRadius:12,marginBottom:8,
+                        background:G.dangerBg,border:`1px solid rgba(122,16,8,0.2)`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{fontSize:12,fontWeight:600,color:G.danger}}>{r.nom||"—"}</div>
+                        <div style={{fontSize:11,fontWeight:700,color:G.danger}}>{r.temp}°C {r.heure}</div>
+                      </div>
+                    ))}
+                  </>)}
+                </>);
+              })()}
+            </>)}
+
+            {/* ══ VUE PAR ZONE ══ */}
+            {dashSubTab==="zones"&&(<>
+              {ZONES.map(z=>{
+                const recs=RECIPES.map(r=>({...r,qty:zoneDemi(inventory[r.id],z.id)}))
+                  .sort((a,b)=>a.qty-b.qty);
+                const total=recs.reduce((s,r)=>s+r.qty,0);
+                const vide=recs.filter(r=>r.qty===0).length;
+                return(
+                  <div key={z.id} style={{marginBottom:28}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",
+                      marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${G.border}`}}>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:700,color:G.copper}}>{z.label}</div>
+                        <div style={{fontSize:10,color:G.light}}>{z.sub}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark}}>{total}</div>
+                        <div style={{fontSize:8,color:G.light}}>demi-eq</div>
+                        {vide>0&&<div style={{fontSize:8,color:G.danger,fontWeight:600}}>{vide} épuisé{vide>1?"s":""}</div>}
+                      </div>
+                    </div>
+                    {recs.map(r=>{
+                      const pct=Math.min(1,r.qty/8);
+                      const c=r.qty===0?G.danger:r.qty<=2?G.warn:G.ok;
+                      return(
+                        <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,
+                          padding:"8px 0",borderBottom:`1px solid ${G.border}`}}>
+                          <div style={{width:3,height:36,borderRadius:2,background:c,flexShrink:0}}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:11,fontWeight:600,color:r.qty===0?G.danger:G.dark,
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
+                            <div style={{height:3,background:"rgba(0,0,0,0.06)",borderRadius:2,overflow:"hidden",marginTop:5}}>
+                              <div style={{height:"100%",borderRadius:2,background:c,
+                                width:`${Math.max(pct*100,r.qty>0?4:0)}%`,transition:"width .4s ease"}}/>
+                            </div>
+                          </div>
+                          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,fontWeight:300,
+                            color:c,flexShrink:0,width:32,textAlign:"right"}}>{r.qty}</div>
+                          <div style={{fontSize:8,color:G.light,flexShrink:0}}>
+                            {inventory[r.id]?.[z.id]?.demi>0&&`${inventory[r.id][z.id].demi}D`}
+                            {inventory[r.id]?.[z.id]?.pleine>0&&` ${inventory[r.id][z.id].pleine}P`}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </>)}
+
+            {/* ══ VUE PAR RECETTE (triée par stock total croissant) ══ */}
+            {dashSubTab==="recettes"&&(<>
+              <div style={{fontSize:10,color:G.light,marginBottom:14}}>
+                {RECIPES.length} recettes · triées par stock total croissant
+              </div>
+              {[...RECIPES].sort((a,b)=>totalZ(inventory[a.id])-totalZ(inventory[b.id])).map(r=>{
+                const zones=ZONES.map(z=>({...z,qty:zoneDemi(inventory[r.id],z.id)}));
+                const tot=zones.reduce((s,z)=>s+z.qty,0);
+                const c=tot===0?G.danger:tot<=3?G.warn:G.ok;
+                const pct=Math.min(1,tot/12);
+                return(
+                  <div key={r.id} style={{padding:"12px 14px",borderRadius:12,marginBottom:8,
+                    background:"rgba(255,251,246,0.7)",border:`1px solid ${G.border}`,
+                    borderLeft:`4px solid ${c}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:600,color:G.dark}}>{r.name}</div>
+                        <div style={{fontSize:9,color:G.light}}>{r.type}</div>
+                      </div>
+                      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:300,color:c}}>{tot}</div>
+                    </div>
+                    <div style={{height:3,background:"rgba(0,0,0,0.06)",borderRadius:2,overflow:"hidden",marginBottom:8}}>
+                      <div style={{height:"100%",borderRadius:2,background:c,
+                        width:`${Math.max(pct*100,tot>0?3:0)}%`,transition:"width .4s ease"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      {zones.map(z=>(
+                        <div key={z.id} style={{flex:1,textAlign:"center",padding:"5px 4px",borderRadius:6,
+                          background:z.qty===0?"rgba(122,16,8,0.05)":"rgba(140,60,16,0.03)"}}>
+                          <div style={{fontSize:7,color:G.light,marginBottom:2}}>{z.label}</div>
+                          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,fontWeight:300,
+                            color:z.qty===0?G.danger:z.qty<=1?G.warn:G.dark}}>{z.qty}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </>)}
+
           </div>
         )}
 
@@ -2010,141 +2323,268 @@ AJUSTEMENTS — raisons`
               </div>
             )}
 
-            {/* ── Séparateur ── */}
-            <div style={{borderTop:`2px solid ${G.border}`,marginBottom:22,position:"relative"}}>
-              <span style={{position:"absolute",top:-9,left:"50%",transform:"translateX(-50%)",
-                background:G.bg,padding:"0 12px",fontSize:8,letterSpacing:3,
-                color:G.light,textTransform:"uppercase"}}> Saisie quantités reçues — puis "Confirmer la livraison"</span>
-            </div>
-
-            <div style={{marginBottom:20}}>
-              <SLabel>Zone de destination</SLabel>
-              <div style={{display:"flex",gap:8,marginTop:8}}>
-                {ZONES.map(z=>(
-                  <button key={z.id} onClick={()=>setDelivZone(z.id)} style={{flex:1,padding:"10px 6px",border:`1px solid ${delivZone===z.id?G.copper:G.border}`,background:delivZone===z.id?G.copper:"rgba(255,255,255,0.5)",backdropFilter:"blur(8px)",color:delivZone===z.id?"#fff":G.mid,borderRadius:10,cursor:"pointer",transition:"all .15s",fontSize:10,letterSpacing:1.5,textTransform:"uppercase",minHeight:"auto"}}>
-                    <div style={{fontWeight:500}}>{z.label}</div><div style={{fontSize:8,opacity:.7,marginTop:1}}>{z.sub}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Résumé saisie */}
-            {(()=>{
-              const withQty=RECIPES.filter(r=>delivery[r.id]?.demi>0||delivery[r.id]?.pleine>0);
-              const withTemp=withQty.filter(r=>tempOk(delivery[r.id]?.temp));
-              const withLot=withQty.filter(r=>deliveryLots[r.id]?.lot);
-              if(!withQty.length) return null;
-              return(
-                <Card style={{padding:"12px 16px",marginBottom:16,display:"flex",gap:16,justifyContent:"space-around"}}>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark}}>{withQty.length}</div>
-                    <div style={{fontSize:8,letterSpacing:2,color:G.light,textTransform:"uppercase",marginTop:2}}>Saveurs</div>
-                  </div>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:withTemp.length===withQty.length?G.ok:G.warn}}>{withTemp.length}/{withQty.length}</div>
-                    <div style={{fontSize:8,letterSpacing:2,color:G.light,textTransform:"uppercase",marginTop:2}}>Temp.</div>
-                  </div>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:withLot.length===withQty.length?G.ok:G.warn}}>{withLot.length}/{withQty.length}</div>
-                    <div style={{fontSize:8,letterSpacing:2,color:G.light,textTransform:"uppercase",marginTop:2}}>Lots lus</div>
-                  </div>
-                </Card>
-              );
-            })()}
-
-            {scanTarget?.mode==="livraison"&&(
-              <ScanModal
-                recipeName={RECIPES.find(r=>r.id===scanTarget.id)?.name}
-                onResult={parsed=>{setDeliveryLots(prev=>({...prev,[scanTarget.id]:parsed}));setScanTarget(null);showToast(`Lot ${parsed.lot||"—"} — DLC ${fmtDate(parsed.dlc)}`);}}
-                onClose={()=>setScanTarget(null)}
-              />
-            )}
-
-            {["Sorbet","Glace"].map(type=>(
-              <div key={type} style={{marginBottom:24}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingBottom:10,borderBottom:`1px solid ${G.border}`}}>
-                  <span style={{fontSize:8,letterSpacing:5,color:G.copper,textTransform:"uppercase"}}>{type}s</span>
-                  <div style={{display:"flex",gap:12}}>
-                    <span style={{fontSize:7,letterSpacing:2,color:G.light}}>Demi 2.5L</span>
-                    <span style={{fontSize:7,letterSpacing:2,color:G.light}}>Pleine 5L</span>
+            {/* ── Wizard réception — étapes ── */}
+            {/* Barre de progression */}
+            <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:20,borderRadius:12,overflow:"hidden",border:`1px solid ${G.border}`}}>
+              {[{n:1,l:"Quantités"},{n:2,l:"Lots / Scan"},{n:3,l:"Validation"}].map((s,i)=>(
+                <div key={s.n} style={{flex:1,padding:"10px 6px",textAlign:"center",
+                  background:livWizardStep===s.n?G.copper:livWizardStep>s.n?"rgba(30,94,50,0.12)":"rgba(255,255,255,0.4)",
+                  borderRight:i<2?`1px solid ${G.border}`:"none",
+                  cursor:livWizardStep>s.n?"pointer":"default",transition:"background .2s",
+                }} onClick={()=>livWizardStep>s.n&&setLivWizardStep(s.n)}>
+                  <div style={{fontSize:10,fontWeight:700,
+                    color:livWizardStep===s.n?"#fff":livWizardStep>s.n?G.ok:G.light}}>
+                    {livWizardStep>s.n?"✓ ":""}{s.n}. {s.l}
                   </div>
                 </div>
-                {RECIPES.filter(r=>r.type===type).map(r=>{
-                  const item=delivery[r.id]||emptyDel();
-                  const lot=deliveryLots[r.id];
-                  const dj=dlcDays(lot?.dlc);
-                  const tw=tempWarn(item.temp);
-                  const hasQty=(item.demi>0||item.pleine>0);
-                  return(
-                    <div key={r.id} style={{padding:"14px 0",borderBottom:`1px solid ${G.border}`,opacity:hasQty?1:0.65}}>
-                      {/* Ligne 1 : Nom + bouton scan */}
-                      <div style={{display:"flex",alignItems:"center",marginBottom:10,gap:8}}>
-                        <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:G.dark,flex:1}}>{r.name}</span>
-                        <button onClick={()=>setScanTarget({id:r.id,mode:"livraison"})}
-                          style={{background:lot?"rgba(42,106,66,0.12)":"rgba(154,72,32,0.09)",backdropFilter:"blur(8px)",
-                            border:`1px solid ${lot?G.ok:G.copper}`,color:lot?G.ok:G.copper,
-                            padding:"6px 14px",borderRadius:20,fontSize:9,letterSpacing:1.5,cursor:"pointer",whiteSpace:"nowrap",minHeight:"auto",fontWeight:500}}>
-                          {lot?"":"Lire étiquette"}
-                        </button>
-                      </div>
-                      {/* Badges lot/DLC si lus */}
-                      {lot&&(
-                        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
-                          {lot.lot&&<GTag>{`Lot ${lot.lot}`}</GTag>}
-                          {lot.dlc&&<GTag warn={dj!==null&&dj<30}>{`DLC ${fmtDate(lot.dlc)}${dj!==null?` — ${dj}j`:""}`}</GTag>}
-                          {lot.fabrique&&<GTag>{`Fab. ${fmtDate(lot.fabrique)}`}</GTag>}
-                          <button onClick={()=>setDeliveryLots(p=>{const n={...p};delete n[r.id];return n;})} style={{background:"none",border:"none",color:G.light,fontSize:14,cursor:"pointer",padding:"0 4px",minHeight:"auto",minWidth:"auto",lineHeight:1}}>×</button>
-                        </div>
-                      )}
-                      {/* Ligne 2 : Quantités + Température */}
-                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
-                          <span style={{fontSize:8,color:G.light,letterSpacing:1,textTransform:"uppercase",whiteSpace:"nowrap",width:26}}>Demi</span>
-                          <QtyCtrl val={item.demi} onChange={v=>updateDel(r.id,"demi",v)}/>
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
-                          <span style={{fontSize:8,color:G.light,letterSpacing:1,textTransform:"uppercase",whiteSpace:"nowrap",width:32}}>Pleine</span>
-                          <QtyCtrl val={item.pleine} onChange={v=>updateDel(r.id,"pleine",v)}/>
-                        </div>
-                        {/* Température — champ prominent */}
-                        <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-                          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              ))}
+            </div>
+
+            {/* ÉTAPE 1 — Zone + Quantités + Températures */}
+            {livWizardStep===1&&(<>
+              <div style={{marginBottom:20}}>
+                <SLabel>Zone de destination</SLabel>
+                <div style={{display:"flex",gap:8,marginTop:8}}>
+                  {ZONES.map(z=>(
+                    <button key={z.id} onClick={()=>setDelivZone(z.id)} style={{flex:1,padding:"10px 6px",border:`1px solid ${delivZone===z.id?G.copper:G.border}`,background:delivZone===z.id?G.copper:"rgba(255,255,255,0.5)",backdropFilter:"blur(8px)",color:delivZone===z.id?"#fff":G.mid,borderRadius:10,cursor:"pointer",transition:"all .15s",fontSize:10,letterSpacing:1.5,textTransform:"uppercase",minHeight:"auto"}}>
+                      <div style={{fontWeight:500}}>{z.label}</div><div style={{fontSize:8,opacity:.7,marginTop:1}}>{z.sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Liste recettes — saisie quantités + temp */}
+              {["Sorbet","Glace"].map(type=>(
+                <div key={type} style={{marginBottom:24}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingBottom:10,borderBottom:`1px solid ${G.border}`}}>
+                    <span style={{fontSize:8,letterSpacing:5,color:G.copper,textTransform:"uppercase"}}>{type}s</span>
+                    <div style={{display:"flex",gap:12}}>
+                      <span style={{fontSize:7,letterSpacing:2,color:G.light}}>Demi 2.5L</span>
+                      <span style={{fontSize:7,letterSpacing:2,color:G.light}}>Pleine 5L</span>
+                    </div>
+                  </div>
+                  {RECIPES.filter(r=>r.type===type).map(r=>{
+                    const item=delivery[r.id]||emptyDel();
+                    const tw=tempWarn(item.temp);
+                    const hasQty=(item.demi>0||item.pleine>0);
+                    return(
+                      <div key={r.id} style={{padding:"14px 0",borderBottom:`1px solid ${G.border}`,opacity:hasQty?1:0.6}}>
+                        <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:G.dark,display:"block",marginBottom:10}}>{r.name}</span>
+                        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
+                            <span style={{fontSize:8,color:G.light,letterSpacing:1,textTransform:"uppercase",whiteSpace:"nowrap",width:26}}>Demi</span>
+                            <QtyCtrl val={item.demi} onChange={v=>updateDel(r.id,"demi",v)}/>
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:6,flex:1}}>
+                            <span style={{fontSize:8,color:G.light,letterSpacing:1,textTransform:"uppercase",whiteSpace:"nowrap",width:32}}>Pleine</span>
+                            <QtyCtrl val={item.pleine} onChange={v=>updateDel(r.id,"pleine",v)}/>
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,flexShrink:0}}>
                             <span style={{fontSize:7,color:tw?G.danger:G.light,letterSpacing:1,textTransform:"uppercase",fontWeight:tw?700:400}}>Temp.</span>
                             <div style={{display:"flex",alignItems:"center",gap:3}}>
-                              <input
-                                type="number" min="-30" max="5" step="0.1"
+                              <input type="number" min="-30" max="5" step="0.1"
                                 value={item.temp??""} placeholder="—"
                                 onChange={e=>updateDel(r.id,"temp",e.target.value===""?null:e.target.value)}
-                                style={{width:60,border:`2px solid ${tw?"rgba(180,30,20,0.7)":tempOk(item.temp)?"rgba(34,110,60,0.5)":"rgba(168,120,70,0.3)"}`,borderRadius:8,
-                                  background:tw?"rgba(180,30,20,0.07)":tempOk(item.temp)?"rgba(34,110,60,0.06)":"rgba(255,255,255,0.6)",
-                                  backdropFilter:"blur(8px)",color:tw?G.danger:tempOk(item.temp)?G.ok:G.dark,
-                                  padding:"8px 6px",fontSize:14,fontWeight:600,outline:"none",minHeight:"auto",textAlign:"center"}}
-                              />
+                                style={{width:60,border:`2px solid ${tw?"rgba(180,30,20,0.7)":tempOk(item.temp)?"rgba(34,110,60,0.5)":"rgba(168,120,70,0.3)"}`,
+                                  borderRadius:8,background:tw?"rgba(180,30,20,0.07)":tempOk(item.temp)?"rgba(34,110,60,0.06)":"rgba(255,255,255,0.6)",
+                                  color:tw?G.danger:tempOk(item.temp)?G.ok:G.dark,
+                                  padding:"8px 6px",fontSize:14,fontWeight:600,outline:"none",minHeight:"auto",textAlign:"center"}}/>
                               <span style={{fontSize:10,color:G.light}}>°C</span>
                             </div>
-                            {tw&&<span style={{fontSize:7,color:G.danger,fontWeight:700,letterSpacing:1}}>ALERTE</span>}
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+                    );
+                  })}
+                </div>
+              ))}
+              <BtnRow>
+                <GBtn primary label="Étape suivante : Scanner les lots →" onClick={()=>{
+                  const withQty=RECIPES.filter(r=>delivery[r.id]?.demi>0||delivery[r.id]?.pleine>0);
+                  if(!withQty.length){showToast("Saisissez au moins une quantité");return;}
+                  setLivWizardStep(2);
+                }}/>
+              </BtnRow>
+            </>)}
 
-            <BtnRow>
-              <GBtn primary label="Confirmer la livraison" onClick={confirmDelivery}/>
-              <GBtn label={pdfLoading?"PDF…":"Exporter PDF"} disabled={pdfLoading} onClick={async()=>{
-                setPdfLoading(true);
-                try{await buildDeliveryPDF(delivery,deliveryLots,ZONES.find(z=>z.id===delivZone)?.label,weekLabel(weekOffset));}
-                catch{showToast("Erreur PDF");}
-                setPdfLoading(false);
-              }}/>
-              <GBtn small label="Envoyer aux docs" disabled={pdfLoading} onClick={()=>setSendDocPending({
-                buildFn:()=>buildDeliveryPDF(delivery,deliveryLots,ZONES.find(z=>z.id===delivZone)?.label,weekLabel(weekOffset),true),
-                docType:"livraison",title:`Bon de réception — ${ZONES.find(z=>z.id===delivZone)?.label}`,weekLbl:weekLabel(weekOffset)
-              })}/>
-            </BtnRow>
+            {/* ÉTAPE 2 — Scan des lots */}
+            {livWizardStep===2&&(<>
+              {scanTarget?.mode==="livraison"&&(
+                <ScanModal
+                  recipeName={RECIPES.find(r=>r.id===scanTarget.id)?.name}
+                  onResult={parsed=>{setDeliveryLots(prev=>({...prev,[scanTarget.id]:parsed}));setScanTarget(null);showToast(`Lot ${parsed.lot||"—"} — DLC ${fmtDate(parsed.dlc)}`);}}
+                  onClose={()=>setScanTarget(null)}
+                />
+              )}
+              {(()=>{
+                const withQty=RECIPES.filter(r=>delivery[r.id]?.demi>0||delivery[r.id]?.pleine>0);
+                const scanned=withQty.filter(r=>deliveryLots[r.id]?.lot).length;
+                return(
+                  <>
+                    <div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,
+                      background:"rgba(140,60,16,0.05)",border:`1px solid ${G.border}`,
+                      display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{fontSize:11,color:G.dark,fontWeight:600}}>
+                        {scanned}/{withQty.length} lots scannés
+                      </div>
+                      <div style={{height:6,flex:1,mx:12,background:"rgba(0,0,0,0.06)",borderRadius:3,overflow:"hidden",margin:"0 12px"}}>
+                        <div style={{height:"100%",borderRadius:3,background:scanned===withQty.length?G.ok:G.copper,
+                          width:`${withQty.length>0?Math.round(scanned/withQty.length*100):0}%`,transition:"width .4s ease"}}/>
+                      </div>
+                    </div>
+                    {withQty.map(r=>{
+                      const lot=deliveryLots[r.id];
+                      const dj=dlcDays(lot?.dlc);
+                      return(
+                        <Card key={r.id} style={{padding:"14px 16px",marginBottom:10,
+                          border:`1px solid ${lot?G.ok+"40":G.border}`}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:lot?8:0}}>
+                            <div style={{flex:1}}>
+                              <div style={{fontSize:13,fontWeight:600,color:G.dark}}>{r.name}</div>
+                              <div style={{fontSize:10,color:G.light,marginTop:2}}>
+                                {delivery[r.id].demi>0&&`${delivery[r.id].demi} demi `}
+                                {delivery[r.id].pleine>0&&`${delivery[r.id].pleine} pleine`}
+                              </div>
+                            </div>
+                            {lot
+                              ?<div style={{display:"flex",alignItems:"center",gap:6,fontSize:9,color:G.ok,fontWeight:600}}>
+                                  ✓ Scanné
+                                  <button onClick={()=>setDeliveryLots(p=>{const n={...p};delete n[r.id];return n;})}
+                                    style={{background:"none",border:`1px solid ${G.border}`,color:G.light,fontSize:11,
+                                      padding:"2px 7px",borderRadius:6,cursor:"pointer",minHeight:"auto"}}>×</button>
+                                </div>
+                              :<button onClick={()=>setScanTarget({id:r.id,mode:"livraison"})}
+                                style={{background:"rgba(140,60,16,0.08)",border:`1px solid ${G.copper}`,
+                                  color:G.copper,padding:"8px 14px",borderRadius:20,
+                                  fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto",whiteSpace:"nowrap"}}>
+                                📷 Scanner
+                              </button>
+                            }
+                          </div>
+                          {lot&&(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                              {lot.lot&&<GTag>{`Lot ${lot.lot}`}</GTag>}
+                              {lot.dlc&&<GTag warn={dj!==null&&dj<30}>{`DLC ${fmtDate(lot.dlc)}${dj!==null?` — ${dj}j`:""}`}</GTag>}
+                              {lot.fabrique&&<GTag>{`Fab. ${fmtDate(lot.fabrique)}`}</GTag>}
+                            </div>
+                          )}
+                          {!lot&&(
+                            <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                              <input placeholder="N° lot" value={deliveryLots[r.id]?.lot||""}
+                                onChange={e=>setDeliveryLots(p=>({...p,[r.id]:{...p[r.id],lot:e.target.value}}))}
+                                style={{flex:1,padding:"7px 10px",borderRadius:8,border:`1px solid ${G.border}`,
+                                  fontSize:12,minHeight:"auto",background:"rgba(255,251,246,0.6)"}}/>
+                              <input placeholder="DLC (YYYY-MM-DD)" value={deliveryLots[r.id]?.dlc||""}
+                                onChange={e=>setDeliveryLots(p=>({...p,[r.id]:{...p[r.id],dlc:e.target.value}}))}
+                                style={{flex:1,padding:"7px 10px",borderRadius:8,border:`1px solid ${G.border}`,
+                                  fontSize:12,minHeight:"auto",background:"rgba(255,251,246,0.6)"}}/>
+                            </div>
+                          )}
+                        </Card>
+                      );
+                    })}
+                  </>
+                );
+              })()}
+              <BtnRow>
+                <GBtn label="← Retour" onClick={()=>setLivWizardStep(1)}/>
+                <GBtn primary label="Valider la réception →" onClick={()=>setLivWizardStep(3)}/>
+              </BtnRow>
+            </>)}
+
+            {/* ÉTAPE 3 — Récapitulatif & Confirmation */}
+            {livWizardStep===3&&(<>
+              {(()=>{
+                const withQty=RECIPES.filter(r=>delivery[r.id]?.demi>0||delivery[r.id]?.pleine>0);
+                const tempAlerts=withQty.filter(r=>tempWarn(delivery[r.id]?.temp));
+                const lotMissing=withQty.filter(r=>!deliveryLots[r.id]?.lot);
+                const dlcAlerts=withQty.filter(r=>dlcDays(deliveryLots[r.id]?.dlc)!==null&&dlcDays(deliveryLots[r.id]?.dlc)<30);
+                return(
+                  <>
+                    {(tempAlerts.length>0||dlcAlerts.length>0)&&(
+                      <div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,
+                        background:G.dangerBg,border:`1px solid rgba(122,16,8,0.2)`}}>
+                        <div style={{fontSize:9,fontWeight:700,color:G.danger,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>
+                          Alertes à vérifier
+                        </div>
+                        {tempAlerts.map(r=><div key={r.id} style={{fontSize:11,color:G.danger}}>⚠ {r.name} — Température hors norme ({delivery[r.id].temp}°C)</div>)}
+                        {dlcAlerts.map(r=><div key={r.id} style={{fontSize:11,color:G.warn}}>⚠ {r.name} — DLC &lt; 30 jours ({dlcDays(deliveryLots[r.id]?.dlc)}j)</div>)}
+                      </div>
+                    )}
+                    {lotMissing.length>0&&(
+                      <div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,
+                        background:"rgba(140,140,140,0.07)",border:`1px solid rgba(140,140,140,0.2)`}}>
+                        <div style={{fontSize:9,color:G.light}}>
+                          {lotMissing.length} recette{lotMissing.length>1?"s":""} sans lot scanné : {lotMissing.map(r=>r.name).join(", ")}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{marginBottom:16}}>
+                      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:6,
+                        padding:"6px 10px",borderRadius:8,background:"rgba(140,60,16,0.06)",
+                        fontSize:8,fontWeight:700,color:G.copper,letterSpacing:.5,textTransform:"uppercase",marginBottom:4}}>
+                        <div>Recette</div><div style={{textAlign:"center"}}>Qté</div>
+                        <div style={{textAlign:"center"}}>Temp.</div><div style={{textAlign:"center"}}>Lot</div>
+                      </div>
+                      {withQty.map(r=>{
+                        const item=delivery[r.id];
+                        const lot=deliveryLots[r.id];
+                        const tw=tempWarn(item.temp);
+                        return(
+                          <div key={r.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:6,
+                            padding:"10px 10px",borderRadius:8,marginBottom:4,
+                            background:"rgba(255,251,246,0.7)",border:`1px solid ${tw||dlcDays(lot?.dlc)<30?G.danger+"30":G.border}`,
+                            borderLeft:`3px solid ${tw?G.danger:G.ok}`,alignItems:"center"}}>
+                            <div style={{fontSize:11,fontWeight:600,color:G.dark,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
+                            <div style={{textAlign:"center",fontSize:11,color:G.mid}}>
+                              {item.demi>0&&`${item.demi}D `}{item.pleine>0&&`${item.pleine}P`}
+                            </div>
+                            <div style={{textAlign:"center",fontSize:11,fontWeight:600,color:tw?G.danger:item.temp!==null?G.ok:G.light}}>
+                              {item.temp!==null?`${item.temp}°C`:"—"}
+                              {tw&&" ⚠"}
+                            </div>
+                            <div style={{textAlign:"center",fontSize:10,color:lot?.lot?G.mid:G.light}}>
+                              {lot?.lot||"—"}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <BtnRow>
+                      <GBtn label="← Retour" onClick={()=>setLivWizardStep(2)}/>
+                      <GBtn primary label="✓ Confirmer la réception" onClick={async()=>{
+                        await confirmDelivery();
+                        // Créer automatiquement les enregistrements de traçabilité
+                        const withQtyNow=RECIPES.filter(r=>delivery[r.id]?.demi>0||delivery[r.id]?.pleine>0);
+                        const newTraca=withQtyNow.map(r=>({
+                          id:Date.now()+Math.random(),
+                          recipeId:r.id,name:r.name,zone:delivZone,
+                          lot:deliveryLots[r.id]?.lot||null,
+                          miseEnPlace:todayISO(),
+                          dlcJ14:addDays(todayISO(),14),
+                          createdAt:new Date().toISOString(),
+                          author:user?.name||"Équipe",
+                        }));
+                        if(newTraca.length>0) await saveTraca([...newTraca,...tracaRecords]);
+                        setLivWizardStep(1);
+                        showToast("✓ Réception confirmée — Traçabilité mise à jour");
+                        // Proposer l'envoi du PDF
+                        setSendDocPending({
+                          buildFn:()=>buildDeliveryPDF(delivery,deliveryLots,ZONES.find(z=>z.id===delivZone)?.label,weekLabel(weekOffset),true),
+                          docType:"livraison",title:`Bon de réception — ${ZONES.find(z=>z.id===delivZone)?.label}`,weekLbl:weekLabel(weekOffset)
+                        });
+                      }}/>
+                      <GBtn label={pdfLoading?"PDF…":"Exporter PDF"} disabled={pdfLoading} onClick={async()=>{
+                        setPdfLoading(true);
+                        try{await buildDeliveryPDF(delivery,deliveryLots,ZONES.find(z=>z.id===delivZone)?.label,weekLabel(weekOffset));}
+                        catch{showToast("Erreur PDF");}
+                        setPdfLoading(false);
+                      }}/>
+                    </BtnRow>
+                  </>
+                );
+              })()}
+            </>)}
           </div>
         )}
 
