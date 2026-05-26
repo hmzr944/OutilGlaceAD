@@ -3132,10 +3132,49 @@ AJUSTEMENTS — raisons`
                   {histEntries.length===0?"Aucune action enregistrée":"Aucun résultat pour ces filtres"}
                 </div>
               );
-              return filtered.map(entry=>(
-                <HistoryEntry key={entry.id} entry={entry}
-                  onDelete={async()=>{await historyAPI.remove(entry.id);setHistEntries(prev=>prev.filter(e=>e.id!==entry.id));}}/>
-              ));
+              return filtered.map(entry=>{
+                const wlFromEntry=typeof entry.data?.week==="number"
+                  ?weekLabel(entry.data.week)
+                  :new Date(entry.createdAt).toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"});
+
+                const handleDownload=["commande","livraison"].includes(entry.type)?async()=>{
+                  if(entry.type==="commande"){
+                    const order=Object.fromEntries(RECIPES.map(r=>[r.id,{demi:entry.data?.c1?.[r.id]?.demi||0,pleine:entry.data?.c1?.[r.id]?.pleine||0}]));
+                    await buildOrderPDF(order,wlFromEntry,"Commande");
+                    if(entry.data?.c2){
+                      const order2=Object.fromEntries(RECIPES.map(r=>[r.id,{demi:entry.data.c2?.[r.id]?.demi||0,pleine:entry.data.c2?.[r.id]?.pleine||0}]));
+                      await buildOrderPDF(order2,wlFromEntry,"Commande 2");
+                    }
+                  } else if(entry.type==="livraison"){
+                    const zone=entry.label.includes("—")?entry.label.split("—").pop().trim():"Zone";
+                    await buildDeliveryPDF(entry.data?.delivery||{},entry.data?.lots||{},zone,wlFromEntry);
+                  }
+                }:undefined;
+
+                const handleSend=["commande","livraison"].includes(entry.type)?()=>{
+                  if(entry.type==="commande"){
+                    const order=Object.fromEntries(RECIPES.map(r=>[r.id,{demi:entry.data?.c1?.[r.id]?.demi||0,pleine:entry.data?.c1?.[r.id]?.pleine||0}]));
+                    setSendDocPending({
+                      buildFn:()=>buildOrderPDF(order,wlFromEntry,"Commande",true),
+                      docType:"commande",title:`Bon de commande — ${wlFromEntry}`,weekLbl:wlFromEntry,
+                    });
+                  } else if(entry.type==="livraison"){
+                    const zone=entry.label.includes("—")?entry.label.split("—").pop().trim():"Zone";
+                    setSendDocPending({
+                      buildFn:()=>buildDeliveryPDF(entry.data?.delivery||{},entry.data?.lots||{},zone,wlFromEntry,true),
+                      docType:"livraison",title:`Bon de réception — ${zone}`,weekLbl:wlFromEntry,
+                    });
+                  }
+                }:undefined;
+
+                return(
+                  <HistoryEntry key={entry.id} entry={entry}
+                    onDelete={async()=>{await historyAPI.remove(entry.id);setHistEntries(prev=>prev.filter(e=>e.id!==entry.id));}}
+                    onDownload={handleDownload}
+                    onSend={handleSend}
+                  />
+                );
+              });
             })()}
           </div>
         )}
@@ -3514,8 +3553,9 @@ function QtyCtrl({val,onChange}){
   );
 }
 
-function HistoryEntry({entry,onDelete}){
+function HistoryEntry({entry,onDelete,onDownload,onSend}){
   const[exp,setExp]=useState(false);
+  const[pdfBusy,setPdfBusy]=useState(false);
   const tC={
     livraison:  {c:"#1E5E32",bg:"rgba(30,94,50,0.08)",  l:"Livraison"},
     commande:   {c:G.copper, bg:"rgba(140,60,16,0.08)", l:"Commande"},
@@ -3582,7 +3622,22 @@ function HistoryEntry({entry,onDelete}){
             {" · "}{dateStr}
           </div>
         </div>
-        <div style={{display:"flex",gap:5,flexShrink:0}}>
+        <div style={{display:"flex",gap:5,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          {onDownload&&(
+            <button disabled={pdfBusy} onClick={async()=>{setPdfBusy(true);try{await onDownload();}finally{setPdfBusy(false);}}}
+              style={{background:`rgba(140,60,16,0.08)`,border:`1px solid rgba(140,60,16,0.25)`,color:G.copper,
+                padding:"5px 10px",fontSize:9,fontWeight:600,borderRadius:6,cursor:"pointer",minHeight:"auto",minWidth:"auto",
+                opacity:pdfBusy?.5:1}}>
+              {pdfBusy?"…":"PDF"}
+            </button>
+          )}
+          {onSend&&(
+            <button disabled={pdfBusy} onClick={onSend}
+              style={{background:"rgba(255,255,255,0.5)",border:`1px solid ${G.border}`,color:G.mid,
+                padding:"5px 10px",fontSize:9,fontWeight:600,borderRadius:6,cursor:"pointer",minHeight:"auto",minWidth:"auto"}}>
+              Envoyer
+            </button>
+          )}
           {hasDetail&&<button onClick={()=>setExp(v=>!v)} style={{background:"rgba(255,255,255,0.5)",border:`1px solid ${G.border}`,color:G.mid,padding:"5px 10px",fontSize:11,borderRadius:6,cursor:"pointer",minHeight:"auto",minWidth:"auto"}}>{exp?"−":"+"}</button>}
           <button onClick={onDelete} style={{background:"rgba(255,255,255,0.5)",border:`1px solid ${G.border}`,color:G.danger,padding:"5px 10px",fontSize:12,borderRadius:6,cursor:"pointer",minHeight:"auto",minWidth:"auto"}}>×</button>
         </div>
