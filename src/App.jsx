@@ -2676,9 +2676,32 @@ AJUSTEMENTS — raisons`
         {tab==="commande"&&(
           <div style={{animation:"fadein .25s ease"}}>
             <div style={{marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${G.border}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
-              <div>
-                <div style={{fontSize:8,letterSpacing:4,color:G.copper,textTransform:"uppercase",marginBottom:4}}>{weekLabel(weekOffset)}</div>
-                <div style={{fontSize:11,color:G.mid}}>{isDouble(weekOffset)?"C1 : dimanche → mardi  ·  C2 : mardi → jeudi":"Commande lundi, livraison mercredi"}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <button onClick={()=>setWeekOffset(w=>w-1)}
+                  style={{background:"none",border:`1px solid ${G.border}`,color:G.mid,
+                    width:28,height:28,borderRadius:"50%",fontSize:16,cursor:"pointer",
+                    display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto",flexShrink:0}}>
+                  ‹
+                </button>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <div style={{fontSize:8,letterSpacing:4,color:G.copper,textTransform:"uppercase"}}>{weekLabel(weekOffset)}</div>
+                    {weekOffset!==0&&(
+                      <button onClick={()=>setWeekOffset(0)}
+                        style={{background:`${G.copper}12`,border:`1px solid ${G.copper}30`,color:G.copper,
+                          fontSize:8,padding:"2px 7px",borderRadius:6,cursor:"pointer",minHeight:"auto",letterSpacing:.5}}>
+                        Aujourd'hui
+                      </button>
+                    )}
+                  </div>
+                  <div style={{fontSize:11,color:G.mid}}>{isDouble(weekOffset)?"C1 : dimanche → mardi  ·  C2 : mardi → jeudi":"Commande lundi, livraison mercredi"}</div>
+                </div>
+                <button onClick={()=>setWeekOffset(w=>w+1)}
+                  style={{background:"none",border:`1px solid ${G.border}`,color:G.mid,
+                    width:28,height:28,borderRadius:"50%",fontSize:16,cursor:"pointer",
+                    display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto",flexShrink:0}}>
+                  ›
+                </button>
               </div>
               {!weather.loading&&weather.tMin!==null&&<div style={{textAlign:"right"}}><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,fontWeight:300,color:G.dark}}>{weather.tMin}–{weather.tMax}°C</div><div style={{fontSize:8,letterSpacing:2,color:G.light,textTransform:"uppercase"}}>{weather.label}</div></div>}
             </div>
