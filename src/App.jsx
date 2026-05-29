@@ -2412,7 +2412,7 @@ AJUSTEMENTS — raisons`
               {scanTarget?.mode==="livraison"&&(
                 <ScanModal
                   recipeName={RECIPES.find(r=>r.id===scanTarget.id)?.name}
-                  onResult={parsed=>{setDeliveryLots(prev=>({...prev,[scanTarget.id]:parsed}));setScanTarget(null);showToast(`Lot ${parsed.lot||"—"} — DLC ${fmtDate(parsed.dlc)}`);}}
+                  onResult={parsed=>{setDeliveryLots(prev=>({...prev,[scanTarget.id]:{...parsed,_scanned:true}}));setScanTarget(null);showToast(`Lot ${parsed.lot||"—"} — DLC ${fmtDate(parsed.dlc)}`);}}
                   onClose={()=>setScanTarget(null)}
                 />
               )}
@@ -2437,8 +2437,8 @@ AJUSTEMENTS — raisons`
                       const dj=dlcDays(lot?.dlc);
                       return(
                         <Card key={r.id} style={{padding:"14px 16px",marginBottom:10,
-                          border:`1px solid ${lot?G.ok+"40":G.border}`}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:lot?8:0}}>
+                          border:`1px solid ${lot?._scanned?G.ok+"40":G.border}`}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:lot?._scanned?8:0}}>
                             <div style={{flex:1}}>
                               <div style={{fontSize:13,fontWeight:600,color:G.dark}}>{r.name}</div>
                               <div style={{fontSize:10,color:G.light,marginTop:2}}>
@@ -2446,7 +2446,7 @@ AJUSTEMENTS — raisons`
                                 {delivery[r.id].pleine>0&&`${delivery[r.id].pleine} pleine`}
                               </div>
                             </div>
-                            {lot
+                            {lot?._scanned
                               ?<div style={{display:"flex",alignItems:"center",gap:6,fontSize:9,color:G.ok,fontWeight:600}}>
                                   ✓ Scanné
                                   <button onClick={()=>setDeliveryLots(p=>{const n={...p};delete n[r.id];return n;})}
@@ -2461,14 +2461,14 @@ AJUSTEMENTS — raisons`
                               </button>
                             }
                           </div>
-                          {lot&&(
+                          {lot?._scanned&&(
                             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                               {lot.lot&&<GTag>{`Lot ${lot.lot}`}</GTag>}
                               {lot.dlc&&<GTag warn={dj!==null&&dj<30}>{`DLC ${fmtDate(lot.dlc)}${dj!==null?` — ${dj}j`:""}`}</GTag>}
                               {lot.fabrique&&<GTag>{`Fab. ${fmtDate(lot.fabrique)}`}</GTag>}
                             </div>
                           )}
-                          {!lot&&(
+                          {!lot?._scanned&&(
                             <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
                               <input placeholder="N° lot" value={deliveryLots[r.id]?.lot||""}
                                 onChange={e=>setDeliveryLots(p=>({...p,[r.id]:{...p[r.id],lot:e.target.value}}))}
