@@ -859,7 +859,7 @@ export default function App(){
       /* 1. Vérifier la session */
       try{
         const r=await fetch("/api/me");
-        if(r.ok){ const d=await r.json(); setUser(d.user); }
+        if(r.ok){ const d=await r.json(); setUser(d.user); if(d.user?.role==="responsable")setTab("boutique"); }
       }catch{}
       setAuthChecked(true);
 
@@ -1146,7 +1146,7 @@ AJUSTEMENTS — raisons`
   if(!user) return(
     <>
       <style>{CSS}</style>
-      <LoginScreen onLogin={u=>{setUser(u); setAuthor(u.name); localStorage.setItem("gl_author",u.name);}}/>
+      <LoginScreen onLogin={u=>{setUser(u); setAuthor(u.name); localStorage.setItem("gl_author",u.name); if(u.role==="responsable")setTab("boutique");}}/>
     </>
   );
 
@@ -1205,18 +1205,17 @@ AJUSTEMENTS — raisons`
         />
       )}
 
-      {/* Onboarding — premier lancement */}
-      {/* ── FAB — Bouton flottant actions rapides ── */}
-      {user&&(
+      {/* ── FAB — Bouton flottant actions rapides — équipier uniquement ── */}
+      {user&&user.role==="equipier"&&(
         <div style={{position:"fixed",bottom:24,right:20,zIndex:990,display:"flex",flexDirection:"column-reverse",alignItems:"flex-end",gap:10}}>
           {fabOpen&&(
             <>
               <div onClick={()=>setFabOpen(false)} style={{position:"fixed",inset:0,zIndex:-1}}/>
               {[
-                {label:"Réception rapide", icon:"📦", action:()=>{setTab("livraison");setFabOpen(false);setLivWizardStep(1);}},
-                {label:"Scanner étiquette",icon:"📷", action:()=>{setTab("livraison");setLivWizardStep(2);setScanTarget({id:RECIPES[0].id,mode:"livraison"});setFabOpen(false);}},
-                {label:"Traçabilité",      icon:"📋", action:()=>{setTab("tracabilite");setFabOpen(false);}},
-                {label:"Commande IA",      icon:"🤖", action:()=>{setTab("commande");setFabOpen(false);}},
+                {label:"Réception rapide",  action:()=>{setTab("livraison");setFabOpen(false);setLivWizardStep(1);}},
+                {label:"Scanner étiquette", action:()=>{setTab("livraison");setLivWizardStep(2);setScanTarget({id:RECIPES[0].id,mode:"livraison"});setFabOpen(false);}},
+                {label:"Traçabilité",       action:()=>{setTab("tracabilite");setFabOpen(false);}},
+                {label:"Commande IA",       action:()=>{setTab("commande");setFabOpen(false);}},
               ].map((a,i)=>(
                 <button key={i} onClick={a.action} style={{
                   display:"flex",alignItems:"center",gap:10,
@@ -1228,7 +1227,6 @@ AJUSTEMENTS — raisons`
                   minHeight:"auto",whiteSpace:"nowrap",
                   animation:`fabIn .18s ease both ${i*.06}s`,
                 }}>
-                  <span style={{fontSize:16}}>{a.icon}</span>
                   <span style={{fontWeight:500}}>{a.label}</span>
                 </button>
               ))}
@@ -1337,62 +1335,73 @@ AJUSTEMENTS — raisons`
             </div>
           </div>
 
-          {/* Navigation — 3 onglets principaux + drawer Plus */}
+          {/* Navigation — rôle-aware */}
           {(()=>{
-            const ctx = getDayContext();
-            const ctxTab = ctx?.tab;
-            const stockTab = "boutique";
-            const isMain = tab==="accueil" || tab===stockTab || (ctxTab && tab===ctxTab);
-            const plusTabs = [
-              {id:"livraison",   l:"Livraison"},
-              {id:"inventaire",  l:"Stock global"},
-              {id:"commande",    l:"Commande"},
-              {id:"tracabilite", l:"Traçabilité"},
-              {id:"documents",   l:"Documents"},
-              {id:"historique",  l:"Journal"},
-              {id:"configs",     l:"Configs"},
-              {id:"accueil",     l:"Accueil"},
-            ].filter(t=>canAccess(t.id));
-
-            const navBtn=(label,active,onClick)=>(
+            const role = user?.role;
+            const navBtn=(label,active,onClick,flex=1)=>(
               <button onClick={onClick} style={{
-                flex:1, padding:"8px 6px", borderRadius:20, cursor:"pointer",
-                background: active ? `linear-gradient(135deg,${G.copperL},${G.copper})` : "rgba(140,60,16,0.055)",
-                border: `1px solid ${active ? G.copper : "transparent"}`,
-                color: active ? "#fff" : G.light, fontSize:11, fontWeight:active?600:400,
-                minHeight:"auto", whiteSpace:"nowrap", flexShrink:0,
-                boxShadow: active ? "0 4px 16px rgba(140,60,16,0.35)" : "none",
+                flex,padding:"8px 6px",borderRadius:20,cursor:"pointer",
+                background:active?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
+                border:`1px solid ${active?G.copper:"transparent"}`,
+                color:active?"#fff":G.light,fontSize:11,fontWeight:active?600:400,
+                minHeight:"auto",whiteSpace:"nowrap",
+                boxShadow:active?"0 4px 16px rgba(140,60,16,0.35)":"none",
                 transition:"all .22s cubic-bezier(.4,0,.2,1)",
-                transform: active ? "translateY(-1px)" : "none",
+                transform:active?"translateY(-1px)":"none",
               }}>{label}</button>
             );
 
+            /* ── RESPONSABLE : 4 onglets fixes ── */
+            if(role==="responsable"){
+              return(
+                <div style={{display:"flex",gap:6,paddingBottom:12}}>
+                  {navBtn("Dashboard",   tab==="boutique",   ()=>setTab("boutique"))}
+                  {navBtn("Documents",   tab==="documents",  ()=>setTab("documents"))}
+                  {navBtn("Journal",     tab==="historique", ()=>setTab("historique"))}
+                  {navBtn("Paramètres",  tab==="configs",    ()=>setTab("configs"))}
+                </div>
+              );
+            }
+
+            /* ── ADJOINT : 2 onglets ── */
+            if(role==="adjoint"){
+              return(
+                <div style={{display:"flex",gap:6,paddingBottom:12}}>
+                  {navBtn("Accueil",    tab==="accueil",    ()=>setTab("accueil"))}
+                  {navBtn("Documents",  tab==="documents",  ()=>setTab("documents"))}
+                </div>
+              );
+            }
+
+            /* ── EQUIPIER : Accueil + Boutique + Menu drawer ── */
+            const drawerTabs=[
+              {id:"livraison",   l:"Réception"},
+              {id:"commande",    l:"Commande"},
+              {id:"tracabilite", l:"Traçabilité"},
+              {id:"inventaire",  l:"Stock global"},
+              {id:"historique",  l:"Journal"},
+            ].filter(t=>canAccess(t.id));
+            const isMain=tab==="accueil"||tab==="boutique";
+            const activeDrawer=drawerTabs.find(t=>t.id===tab);
             return(
               <>
                 <div style={{display:"flex",gap:6,paddingBottom:12}}>
-                  {navBtn("Aujourd'hui", ctxTab ? tab===ctxTab : tab==="accueil",
-                    ()=>{ if(ctxTab&&canAccess(ctxTab))setTab(ctxTab); else setTab("accueil"); })}
-                  {canAccess(stockTab)&&navBtn(
-                    user?.role==="responsable"?"Dashboard":"Stock",
-                    tab===stockTab, ()=>setTab(stockTab))}
+                  {navBtn("Accueil",  tab==="accueil",  ()=>setTab("accueil"))}
+                  {navBtn("Boutique", tab==="boutique", ()=>setTab("boutique"))}
                   <button onClick={()=>setPlusOpen(true)} style={{
-                    flex:1, padding:"8px 6px", borderRadius:20, cursor:"pointer",
-                    background: !isMain ? `linear-gradient(135deg,${G.copperL},${G.copper})` : "rgba(140,60,16,0.055)",
-                    border: `1px solid ${!isMain ? G.copper : "transparent"}`,
-                    color: !isMain ? "#fff" : G.light, fontSize:11, fontWeight:!isMain?600:400,
-                    minHeight:"auto", whiteSpace:"nowrap",
-                    boxShadow: !isMain ? "0 4px 16px rgba(140,60,16,0.35)" : "none",
+                    flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
+                    background:!isMain?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
+                    border:`1px solid ${!isMain?G.copper:"transparent"}`,
+                    color:!isMain?"#fff":G.light,fontSize:11,fontWeight:!isMain?600:400,
+                    minHeight:"auto",whiteSpace:"nowrap",
+                    boxShadow:!isMain?"0 4px 16px rgba(140,60,16,0.35)":"none",
                     transition:"all .22s cubic-bezier(.4,0,.2,1)",
-                    transform: !isMain ? "translateY(-1px)" : "none",
-                  }}>Plus {!isMain?`— ${plusTabs.find(t=>t.id===tab)?.l||""}`:""} ▾</button>
+                    transform:!isMain?"translateY(-1px)":"none",
+                  }}>{activeDrawer?activeDrawer.l:"Menu"} {!isMain?"▴":"▾"}</button>
                 </div>
 
-                {/* Drawer Plus */}
                 {plusOpen&&(<>
-                  <div onClick={()=>setPlusOpen(false)} style={{
-                    position:"fixed",inset:0,zIndex:800,
-                    background:"rgba(22,14,6,0.35)",backdropFilter:"blur(2px)"
-                  }}/>
+                  <div onClick={()=>setPlusOpen(false)} style={{position:"fixed",inset:0,zIndex:800,background:"rgba(22,14,6,0.35)",backdropFilter:"blur(2px)"}}/>
                   <div style={{
                     position:"fixed",bottom:0,left:0,right:0,zIndex:900,
                     background:G.glassS,backdropFilter:G.blur,
@@ -1402,19 +1411,17 @@ AJUSTEMENTS — raisons`
                     animation:"drawerUp .22s ease",
                   }}>
                     <div style={{width:36,height:3,background:G.border,borderRadius:2,margin:"0 auto 16px",opacity:.5}}/>
-                    <div style={{fontSize:8,letterSpacing:3,color:G.light,textTransform:"uppercase",marginBottom:12}}>Navigation</div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                      {plusTabs.map(t=>(
+                    <div style={{fontSize:8,letterSpacing:3,color:G.light,textTransform:"uppercase",marginBottom:12}}>Actions</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {drawerTabs.map(t=>(
                         <button key={t.id} onClick={()=>{setTab(t.id);setPlusOpen(false);}} style={{
-                          padding:"12px 14px",borderRadius:12,textAlign:"left",
-                          background: tab===t.id?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.8)",
+                          padding:"13px 16px",borderRadius:12,textAlign:"left",
+                          background:tab===t.id?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.8)",
                           border:`1px solid ${tab===t.id?G.copper:G.border}`,
-                          color: tab===t.id?"#fff":G.dark,
-                          fontSize:12,fontWeight:tab===t.id?600:400,
+                          color:tab===t.id?"#fff":G.dark,
+                          fontSize:13,fontWeight:tab===t.id?600:400,
                           cursor:"pointer",minHeight:"auto",transition:"all .18s",
-                        }}>
-                          {t.l}
-                        </button>
+                        }}>{t.l}</button>
                       ))}
                     </div>
                   </div>
@@ -1428,17 +1435,16 @@ AJUSTEMENTS — raisons`
       {/* BODY */}
       <div style={{padding:"24px 20px 80px",maxWidth:640,margin:"0 auto"}}>
 
-        {/* ── Bannière de contexte du jour ── */}
+        {/* ── Bannière de contexte du jour — équipier uniquement ── */}
         {(()=>{
           const ctx=getDayContext();
-          if(!ctx||!user) return null;
+          if(!ctx||!user||user.role==="responsable"||user.role==="adjoint") return null;
           return(
             <div style={{
               marginBottom:16,padding:"10px 14px",borderRadius:12,
               background:`${ctx.color}12`,border:`1px solid ${ctx.color}25`,
               display:"flex",alignItems:"center",gap:10,
             }}>
-              <span style={{fontSize:14,flexShrink:0}}>📍</span>
               <div style={{flex:1,minWidth:0,fontSize:11,color:ctx.color,fontWeight:600,lineHeight:1.5}}>
                 {ctx.txt}
               </div>
