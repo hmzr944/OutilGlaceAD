@@ -1337,10 +1337,29 @@ AJUSTEMENTS — raisons`
 
           {/* Navigation — rôle-aware */}
           {(()=>{
-            const role = user?.role;
-            const navBtn=(label,active,onClick,flex=1)=>(
+            /* ── MENU UNIQUE filtré par rôle ── */
+            // Ordre de priorité : les 3 premiers s'affichent dans la barre,
+            // le reste dans le drawer. canAccess filtre automatiquement.
+            const ALL_NAV=[
+              {id:"boutique",   l:"Boutique"},
+              {id:"livraison",  l:"Réception"},
+              {id:"commande",   l:"Commande"},
+              {id:"tracabilite",l:"Traçabilité"},
+              {id:"inventaire", l:"Stock"},
+              {id:"historique", l:"Journal"},
+              {id:"documents",  l:"Documents"},
+              {id:"configs",    l:"Paramètres"},
+              {id:"accueil",    l:"Accueil"},
+            ].filter(t=>canAccess(t.id));
+            const mainTabs   = ALL_NAV.slice(0,3);
+            const drawerTabs = ALL_NAV.slice(3);
+            const hasDrawer  = drawerTabs.length>0;
+            const activeDrawer = drawerTabs.find(t=>t.id===tab);
+            const isMain = !activeDrawer;
+
+            const navBtn=(label,active,onClick)=>(
               <button onClick={onClick} style={{
-                flex,padding:"8px 6px",borderRadius:20,cursor:"pointer",
+                flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
                 background:active?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
                 border:`1px solid ${active?G.copper:"transparent"}`,
                 color:active?"#fff":G.light,fontSize:11,fontWeight:active?600:400,
@@ -1351,56 +1370,25 @@ AJUSTEMENTS — raisons`
               }}>{label}</button>
             );
 
-            /* ── RESPONSABLE : 4 onglets fixes ── */
-            if(role==="responsable"){
-              return(
-                <div style={{display:"flex",gap:6,paddingBottom:12}}>
-                  {navBtn("Dashboard",   tab==="boutique",   ()=>setTab("boutique"))}
-                  {navBtn("Documents",   tab==="documents",  ()=>setTab("documents"))}
-                  {navBtn("Journal",     tab==="historique", ()=>setTab("historique"))}
-                  {navBtn("Paramètres",  tab==="configs",    ()=>setTab("configs"))}
-                </div>
-              );
-            }
-
-            /* ── ADJOINT : 2 onglets ── */
-            if(role==="adjoint"){
-              return(
-                <div style={{display:"flex",gap:6,paddingBottom:12}}>
-                  {navBtn("Accueil",    tab==="accueil",    ()=>setTab("accueil"))}
-                  {navBtn("Documents",  tab==="documents",  ()=>setTab("documents"))}
-                </div>
-              );
-            }
-
-            /* ── EQUIPIER : Accueil + Boutique + Menu drawer ── */
-            const drawerTabs=[
-              {id:"livraison",   l:"Réception"},
-              {id:"commande",    l:"Commande"},
-              {id:"tracabilite", l:"Traçabilité"},
-              {id:"inventaire",  l:"Stock global"},
-              {id:"historique",  l:"Journal"},
-            ].filter(t=>canAccess(t.id));
-            const isMain=tab==="accueil"||tab==="boutique";
-            const activeDrawer=drawerTabs.find(t=>t.id===tab);
             return(
               <>
                 <div style={{display:"flex",gap:6,paddingBottom:12}}>
-                  {navBtn("Accueil",  tab==="accueil",  ()=>setTab("accueil"))}
-                  {navBtn("Boutique", tab==="boutique", ()=>setTab("boutique"))}
-                  <button onClick={()=>setPlusOpen(true)} style={{
-                    flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
-                    background:!isMain?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
-                    border:`1px solid ${!isMain?G.copper:"transparent"}`,
-                    color:!isMain?"#fff":G.light,fontSize:11,fontWeight:!isMain?600:400,
-                    minHeight:"auto",whiteSpace:"nowrap",
-                    boxShadow:!isMain?"0 4px 16px rgba(140,60,16,0.35)":"none",
-                    transition:"all .22s cubic-bezier(.4,0,.2,1)",
-                    transform:!isMain?"translateY(-1px)":"none",
-                  }}>{activeDrawer?activeDrawer.l:"Menu"} {!isMain?"▴":"▾"}</button>
+                  {mainTabs.map(t=>navBtn(t.l, tab===t.id, ()=>setTab(t.id)))}
+                  {hasDrawer&&(
+                    <button onClick={()=>setPlusOpen(true)} style={{
+                      flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
+                      background:!isMain?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
+                      border:`1px solid ${!isMain?G.copper:"transparent"}`,
+                      color:!isMain?"#fff":G.light,fontSize:11,fontWeight:!isMain?600:400,
+                      minHeight:"auto",whiteSpace:"nowrap",
+                      boxShadow:!isMain?"0 4px 16px rgba(140,60,16,0.35)":"none",
+                      transition:"all .22s cubic-bezier(.4,0,.2,1)",
+                      transform:!isMain?"translateY(-1px)":"none",
+                    }}>{activeDrawer?activeDrawer.l:"Plus"} {!isMain?"▴":"▾"}</button>
+                  )}
                 </div>
 
-                {plusOpen&&(<>
+                {hasDrawer&&plusOpen&&(<>
                   <div onClick={()=>setPlusOpen(false)} style={{position:"fixed",inset:0,zIndex:800,background:"rgba(22,14,6,0.35)",backdropFilter:"blur(2px)"}}/>
                   <div style={{
                     position:"fixed",bottom:0,left:0,right:0,zIndex:900,
@@ -1411,7 +1399,6 @@ AJUSTEMENTS — raisons`
                     animation:"drawerUp .22s ease",
                   }}>
                     <div style={{width:36,height:3,background:G.border,borderRadius:2,margin:"0 auto 16px",opacity:.5}}/>
-                    <div style={{fontSize:8,letterSpacing:3,color:G.light,textTransform:"uppercase",marginBottom:12}}>Actions</div>
                     <div style={{display:"flex",flexDirection:"column",gap:8}}>
                       {drawerTabs.map(t=>(
                         <button key={t.id} onClick={()=>{setTab(t.id);setPlusOpen(false);}} style={{
@@ -1435,10 +1422,10 @@ AJUSTEMENTS — raisons`
       {/* BODY */}
       <div style={{padding:"24px 20px 80px",maxWidth:640,margin:"0 auto"}}>
 
-        {/* ── Bannière de contexte du jour — équipier uniquement ── */}
+        {/* ── Bannière de contexte du jour ── */}
         {(()=>{
           const ctx=getDayContext();
-          if(!ctx||!user||user.role==="responsable"||user.role==="adjoint") return null;
+          if(!ctx||!user||!canAccess(ctx.tab)) return null;
           return(
             <div style={{
               marginBottom:16,padding:"10px 14px",borderRadius:12,
