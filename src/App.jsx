@@ -844,8 +844,9 @@ export default function App(){
     setPdfLoading(false);
   },[]);
 
-  const toastRef  = useRef(null);
-  const weatherRef= useRef(null);
+  const toastRef      = useRef(null);
+  const weatherRef    = useRef(null);
+  const lastInvEditRef= useRef(0); // timestamp dernier edit local inventory
   const season    = getSeason(weekOffset);
   const eco       = computeEco(snapshot, inventory);
   const invStatus    = useDebouncedSave("ad9_inv",     inventory,    loaded);
@@ -908,26 +909,34 @@ export default function App(){
   };
 
   /* ── Updates ── */
-  const updateInv = useCallback((id,zoneId,field,v) =>
-    setInventory(prev=>({...prev,[id]:{...prev[id],[zoneId]:{...prev[id][zoneId],[field]:Math.max(0,v)}}})),[]);
+  const updateInv = useCallback((id,zoneId,field,v) =>{
+    lastInvEditRef.current=Date.now();
+    setInventory(prev=>({...prev,[id]:{...prev[id],[zoneId]:{...(prev[id]?.[zoneId]||emptyZone()),[field]:Math.max(0,v)}}}));
+  },[]);
   const updateDel = useCallback((id,field,v) =>
     setDelivery(prev=>({...prev,[id]:{...prev[id],[field]:field==="temp"?v:Math.max(0,+v)}})),[]);
 
   /* ── Confirmer livraison ── */
   const confirmDelivery = useCallback(async()=>{
     const zoneName=ZONES.find(z=>z.id===delivZone)?.label;
+    lastInvEditRef.current=Date.now();
+    // Calculer le nouvel inventaire hors du setter pour l'enregistrer immédiatement
+    let newInv;
     setInventory(prev=>{
       const next=JSON.parse(JSON.stringify(prev));
       RECIPES.forEach(r=>{
-        const cur=next[r.id][delivZone]||emptyZone();
+        const cur=next[r.id]?.[delivZone]||emptyZone();
         const del=delivery[r.id]||emptyDel();
         next[r.id][delivZone]={demi:cur.demi+del.demi, pleine:cur.pleine+del.pleine};
       });
       const snap={deliveredAt:Date.now(),zone:delivZone,delivery:JSON.parse(JSON.stringify(delivery)),lots:JSON.parse(JSON.stringify(deliveryLots)),data:next};
       setSnapshot(snap);
       storage.set("ad9_snap",JSON.stringify(snap)).catch(()=>{});
+      newInv=next;
       return next;
     });
+    // Sauvegarde immédiate (pas de debounce) pour éviter la race avec syncNow
+    setTimeout(()=>{ if(newInv) storage.set("ad9_inv",JSON.stringify(newInv)).catch(()=>{}); },50);
     const entry=await historyAPI.push({type:"livraison",label:`Livraison — ${zoneName}`,author:user?.name||"Équipe",
       data:{zone:delivZone,delivery:Object.fromEntries(RECIPES.map(r=>[r.id,delivery[r.id]])),lots:deliveryLots}});
     if(entry) setHistEntries(prev=>[entry,...prev]);
@@ -1029,7 +1038,10 @@ AJUSTEMENTS — raisons`
       const r=await fetch("/api/snapshot");
       if(!r.ok) return;
       const{inv,traca,temprec}=await r.json();
-      if(inv)    setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      // Ne pas écraser l'inventaire local si un edit a eu lieu dans les 2 dernières secondes
+      // (évite la race condition entre debounce 600ms et le sync 15s)
+      const invRecentlyEdited = Date.now()-lastInvEditRef.current < 2000;
+      if(inv&&!invRecentlyEdited) setInventory(cur=>{try{const v=JSON.parse(inv);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       setLastSync(new Date());
