@@ -667,6 +667,75 @@ const G = {
   dangerBg:"rgba(122,16,8,0.07)",
 };
 
+/* ─── CAISSE — Produits et tarifs ─────────────────── */
+const CAISSE_ITEMS=[
+  {id:"cornet",    cat:"Format",  name:"Cornet",      price:7   },
+  {id:"petit_pot", cat:"Format",  name:"Petit pot",   price:7   },
+  {id:"gros_pot",  cat:"Format",  name:"Gros pot",    price:9   },
+  {id:"bento_sm",  cat:"Format",  name:"Bento 600ml", price:22  },
+  {id:"bento_lg",  cat:"Format",  name:"Bento 1.2L",  price:42  },
+  {id:"expresso",  cat:"Boisson", name:"Expresso",    price:3.5 },
+  {id:"cappuccino",cat:"Boisson", name:"Cappuccino",  price:6   },
+  {id:"affogato",  cat:"Boisson", name:"Affogato",    price:10  },
+  {id:"perrier",   cat:"Boisson", name:"Perrier",     price:3   },
+  {id:"eau",       cat:"Boisson", name:"Eau",         price:3   },
+  {id:"jus",       cat:"Boisson", name:"Jus",         price:6   },
+];
+
+const buildCaissePDF=async(transactions,dateStr)=>{
+  const{jsPDF}=await loadJsPDF();
+  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const M=14,R=196;let y=10;
+  const T=(font,size,color,text,x,yy,opt={})=>{doc.setFont(...font);doc.setFontSize(size);doc.setTextColor(...color);doc.text(text,x,yy,opt);};
+  const BG=(x,yy,w,h,c)=>{doc.setFillColor(...c);doc.rect(x,yy,w,h,"F");};
+  const HR=(c,lw=0.3)=>{doc.setDrawColor(...c);doc.setLineWidth(lw);doc.line(M,y,R,y);};
+
+  BG(0,0,210,26,[248,242,234]);
+  T(["helvetica","bold"],7,[168,82,46],"ALAIN DUCASSE — MANUFACTURE DE GLACE",M,10);
+  T(["times","normal"],19,[26,20,16],"Récapitulatif Caisse",M,20);
+  T(["helvetica","normal"],8,[120,90,60],dateStr,R,10,{align:"right"});
+  y=34;
+
+  const totCB  =transactions.filter(t=>t.payment==="CB").reduce((s,t)=>s+t.total,0);
+  const totAMEX=transactions.filter(t=>t.payment==="AMEX").reduce((s,t)=>s+t.total,0);
+  const totEsp =transactions.filter(t=>t.payment==="Espèces").reduce((s,t)=>s+t.total,0);
+  const totAll =totCB+totAMEX+totEsp;
+
+  // Blocs totaux
+  [[M,"CB",totCB,[26,58,106]],[M+48,"AMEX",totAMEX,[30,94,50]],[M+96,"Espèces",totEsp,[148,82,8]]].forEach(([x,l,v,c])=>{
+    BG(x,y,40,28,[250,245,238]);
+    T(["helvetica","bold"],7,[100,70,40],l,x+4,y+7);
+    T(["times","normal"],15,c,`${v.toFixed(2)} €`,x+4,y+18);
+  });
+  BG(M+142,y,R-M-142,28,[168,82,46]);
+  T(["helvetica","bold"],7,[255,255,255],"TOTAL",M+146,y+7);
+  T(["times","normal"],15,[255,255,255],`${totAll.toFixed(2)} €`,M+146,y+18);
+  y+=36;
+
+  T(["helvetica","bold"],8,[100,70,40],"DÉTAIL DES TRANSACTIONS",M,y);
+  y+=6;HR([190,168,140],0.5);y+=4;
+  BG(M,y,R-M,8,[235,222,205]);
+  T(["helvetica","bold"],6.5,[80,48,20],"HEURE",M+2,y+5.5);
+  T(["helvetica","bold"],6.5,[80,48,20],"ARTICLES",M+18,y+5.5);
+  T(["helvetica","bold"],6.5,[80,48,20],"PAIEMENT",M+138,y+5.5);
+  T(["helvetica","bold"],6.5,[80,48,20],"MONTANT",R-2,y+5.5,{align:"right"});
+  y+=10;
+
+  transactions.forEach((tx,i)=>{
+    if(y>272){doc.addPage();y=20;}
+    if(i%2===0)BG(M,y-2,R-M,8,[250,248,244]);
+    const items=tx.items.map(it=>`${it.name}${it.qty>1?` ×${it.qty}`:""}`).join(", ");
+    T(["helvetica","normal"],7,[60,50,40],tx.time,M+2,y+3.5);
+    T(["helvetica","normal"],7,[60,50,40],items.substring(0,62),M+18,y+3.5);
+    T(["helvetica","normal"],7,[60,50,40],tx.payment,M+138,y+3.5);
+    T(["helvetica","bold"],8,[168,82,46],`${tx.total.toFixed(2)} €`,R-2,y+3.5,{align:"right"});
+    y+=8;
+  });
+  y+=4;HR([190,168,140],0.5);y+=6;
+  T(["helvetica","bold"],10,[168,82,46],`TOTAL JOURNÉE : ${totAll.toFixed(2)} €`,R-2,y,{align:"right"});
+  doc.save(`Caisse_${dateStr.replace(/[^0-9]/g,"-").replace(/-+/g,"-")}.pdf`);
+};
+
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap');
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -675,6 +744,7 @@ const CSS = `
   select option{background:#FFF8F0;color:#160E06}
   ::-webkit-scrollbar{width:3px}
   ::-webkit-scrollbar-thumb{background:rgba(140,60,16,0.14);border-radius:3px}
+  .nav-scroll::-webkit-scrollbar{display:none}
 
   /* ── Animations ── */
   @keyframes shimmer    {from{left:-100%}to{left:110%}}
@@ -1123,6 +1193,7 @@ AJUSTEMENTS — raisons`
     inventaire: ["equipier"],
     commande:   ["equipier"],
     tracabilite:["equipier"],
+    caisse:     ["equipier"],
     documents:  ["adjoint","responsable"],
     configs:    ["responsable"],
     historique: ["equipier","responsable"],
@@ -1335,85 +1406,39 @@ AJUSTEMENTS — raisons`
             </div>
           </div>
 
-          {/* Navigation — rôle-aware */}
+          {/* Navigation — barre scrollable unique, filtrée par rôle */}
           {(()=>{
-            /* ── MENU UNIQUE filtré par rôle ── */
-            // Ordre de priorité : les 3 premiers s'affichent dans la barre,
-            // le reste dans le drawer. canAccess filtre automatiquement.
             const ALL_NAV=[
               {id:"boutique",   l:"Boutique"},
               {id:"livraison",  l:"Réception"},
               {id:"commande",   l:"Commande"},
               {id:"tracabilite",l:"Traçabilité"},
               {id:"inventaire", l:"Stock"},
+              {id:"caisse",     l:"Caisse"},
               {id:"historique", l:"Journal"},
               {id:"documents",  l:"Documents"},
               {id:"configs",    l:"Paramètres"},
               {id:"accueil",    l:"Accueil"},
             ].filter(t=>canAccess(t.id));
-            const mainTabs   = ALL_NAV.slice(0,3);
-            const drawerTabs = ALL_NAV.slice(3);
-            const hasDrawer  = drawerTabs.length>0;
-            const activeDrawer = drawerTabs.find(t=>t.id===tab);
-            const isMain = !activeDrawer;
-
-            const navBtn=(label,active,onClick)=>(
-              <button onClick={onClick} style={{
-                flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
-                background:active?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
-                border:`1px solid ${active?G.copper:"transparent"}`,
-                color:active?"#fff":G.light,fontSize:11,fontWeight:active?600:400,
-                minHeight:"auto",whiteSpace:"nowrap",
-                boxShadow:active?"0 4px 16px rgba(140,60,16,0.35)":"none",
-                transition:"all .22s cubic-bezier(.4,0,.2,1)",
-                transform:active?"translateY(-1px)":"none",
-              }}>{label}</button>
-            );
-
             return(
-              <>
-                <div style={{display:"flex",gap:6,paddingBottom:12}}>
-                  {mainTabs.map(t=>navBtn(t.l, tab===t.id, ()=>setTab(t.id)))}
-                  {hasDrawer&&(
-                    <button onClick={()=>setPlusOpen(true)} style={{
-                      flex:1,padding:"8px 6px",borderRadius:20,cursor:"pointer",
-                      background:!isMain?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
-                      border:`1px solid ${!isMain?G.copper:"transparent"}`,
-                      color:!isMain?"#fff":G.light,fontSize:11,fontWeight:!isMain?600:400,
-                      minHeight:"auto",whiteSpace:"nowrap",
-                      boxShadow:!isMain?"0 4px 16px rgba(140,60,16,0.35)":"none",
-                      transition:"all .22s cubic-bezier(.4,0,.2,1)",
-                      transform:!isMain?"translateY(-1px)":"none",
-                    }}>{activeDrawer?activeDrawer.l:"Plus"} {!isMain?"▴":"▾"}</button>
-                  )}
-                </div>
-
-                {hasDrawer&&plusOpen&&(<>
-                  <div onClick={()=>setPlusOpen(false)} style={{position:"fixed",inset:0,zIndex:800,background:"rgba(22,14,6,0.35)",backdropFilter:"blur(2px)"}}/>
-                  <div style={{
-                    position:"fixed",bottom:0,left:0,right:0,zIndex:900,
-                    background:G.glassS,backdropFilter:G.blur,
-                    borderRadius:"20px 20px 0 0",
-                    boxShadow:"0 -8px 40px rgba(70,32,8,0.2)",
-                    padding:"16px 20px 40px",
-                    animation:"drawerUp .22s ease",
-                  }}>
-                    <div style={{width:36,height:3,background:G.border,borderRadius:2,margin:"0 auto 16px",opacity:.5}}/>
-                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                      {drawerTabs.map(t=>(
-                        <button key={t.id} onClick={()=>{setTab(t.id);setPlusOpen(false);}} style={{
-                          padding:"13px 16px",borderRadius:12,textAlign:"left",
-                          background:tab===t.id?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.8)",
-                          border:`1px solid ${tab===t.id?G.copper:G.border}`,
-                          color:tab===t.id?"#fff":G.dark,
-                          fontSize:13,fontWeight:tab===t.id?600:400,
-                          cursor:"pointer",minHeight:"auto",transition:"all .18s",
-                        }}>{t.l}</button>
-                      ))}
-                    </div>
-                  </div>
-                </>)}
-              </>
+              <div className="nav-scroll" style={{
+                display:"flex",gap:6,paddingBottom:12,
+                overflowX:"auto",msOverflowStyle:"none",scrollbarWidth:"none",
+                WebkitOverflowScrolling:"touch",
+              }}>
+                {ALL_NAV.map(t=>(
+                  <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                    flexShrink:0,padding:"8px 14px",borderRadius:20,cursor:"pointer",
+                    background:tab===t.id?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(140,60,16,0.055)",
+                    border:`1px solid ${tab===t.id?G.copper:"transparent"}`,
+                    color:tab===t.id?"#fff":G.light,fontSize:11,fontWeight:tab===t.id?600:400,
+                    minHeight:"auto",whiteSpace:"nowrap",
+                    boxShadow:tab===t.id?"0 4px 16px rgba(140,60,16,0.35)":"none",
+                    transition:"all .22s cubic-bezier(.4,0,.2,1)",
+                    transform:tab===t.id?"translateY(-1px)":"none",
+                  }}>{t.l}</button>
+                ))}
+              </div>
             );
           })()}
         </div>
@@ -3028,6 +3053,9 @@ AJUSTEMENTS — raisons`
           </div>
         )}
 
+        {/* ══ CAISSE ══ */}
+        {tab==="caisse"&&<CaisseTab showToast={showToast}/>}
+
         {/* ══ DOCUMENTS ══ */}
         {tab==="documents"&&<DropboxTab user={user} showToast={showToast}/>}
 
@@ -4030,6 +4058,188 @@ function SendDocModal({docType, onSend, onCancel}){
           Annuler
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════
+   CAISSE DU JOUR
+═══════════════════════════ */
+function CaisseTab({showToast}){
+  const todayKey=()=>`ad9_caisse_${new Date().toISOString().split("T")[0]}`;
+  const todayFr =new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
+
+  const[cart,setCart]   =useState([]);
+  const[txs,setTxs]     =useState([]);
+  const[pdfBusy,setPdfBusy]=useState(false);
+
+  useEffect(()=>{
+    (async()=>{
+      try{const r=await storage.get(todayKey());if(r?.value)setTxs(JSON.parse(r.value));}catch{}
+    })();
+  },[]);
+
+  const saveTxs=async(list)=>{
+    try{await storage.set(todayKey(),JSON.stringify(list));}catch{}
+  };
+
+  const addItem=item=>setCart(prev=>{
+    const ex=prev.find(i=>i.id===item.id);
+    if(ex)return prev.map(i=>i.id===item.id?{...i,qty:i.qty+1}:i);
+    return[...prev,{...item,qty:1}];
+  });
+  const removeItem=id=>setCart(prev=>{
+    const ex=prev.find(i=>i.id===id);if(!ex)return prev;
+    if(ex.qty<=1)return prev.filter(i=>i.id!==id);
+    return prev.map(i=>i.id===id?{...i,qty:i.qty-1}:i);
+  });
+
+  const cartTotal=cart.reduce((s,i)=>s+i.price*i.qty,0);
+  const fmt=v=>`${v.toFixed(2).replace(".",",")} €`;
+
+  const confirmSale=async payment=>{
+    if(!cart.length)return;
+    const tx={id:Date.now().toString(),items:cart.map(i=>({id:i.id,name:i.name,price:i.price,qty:i.qty})),total:cartTotal,payment,time:new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})};
+    const next=[tx,...txs];
+    setTxs(next);setCart([]);
+    await saveTxs(next);
+    showToast(`Vente réglée — ${fmt(cartTotal)} ${payment}`);
+  };
+
+  const deleteTx=async id=>{
+    const next=txs.filter(t=>t.id!==id);setTxs(next);await saveTxs(next);
+  };
+
+  const totCB  =txs.filter(t=>t.payment==="CB").reduce((s,t)=>s+t.total,0);
+  const totAMEX=txs.filter(t=>t.payment==="AMEX").reduce((s,t)=>s+t.total,0);
+  const totEsp =txs.filter(t=>t.payment==="Espèces").reduce((s,t)=>s+t.total,0);
+  const totDay =totCB+totAMEX+totEsp;
+
+  const cats=[...new Set(CAISSE_ITEMS.map(i=>i.cat))];
+
+  return(
+    <div style={{animation:"fadein .25s ease"}}>
+
+      {/* En-tête + totaux jour */}
+      <div style={{marginBottom:20,paddingBottom:16,borderBottom:`1px solid ${G.border}`}}>
+        <div style={{fontSize:8,letterSpacing:4,color:G.copper,textTransform:"uppercase",marginBottom:4}}>Aujourd'hui — {todayFr}</div>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark,marginBottom:14}}>Caisse du jour</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+          {[{l:"CB",v:totCB,c:"#1A3A6A"},{l:"AMEX",v:totAMEX,c:"#1E5E32"},{l:"Espèces",v:totEsp,c:"#945208"},{l:"Total",v:totDay,c:G.copper}].map(s=>(
+            <Card key={s.l} style={{padding:"10px 6px",textAlign:"center",border:`1px solid ${s.c}22`}}>
+              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:300,color:s.c,lineHeight:1}}>{fmt(s.v)}</div>
+              <div style={{fontSize:7,letterSpacing:1.5,color:G.light,textTransform:"uppercase",marginTop:3}}>{s.l}</div>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      {/* Produits */}
+      {cats.map(cat=>(
+        <div key={cat} style={{marginBottom:18}}>
+          <div style={{fontSize:8,letterSpacing:3,color:G.copper,textTransform:"uppercase",marginBottom:10,fontWeight:600,paddingBottom:6,borderBottom:`1px solid ${G.border}`}}>{cat}</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {CAISSE_ITEMS.filter(i=>i.cat===cat).map(item=>{
+              const inCart=cart.find(c=>c.id===item.id);
+              return(
+                <button key={item.id} onClick={()=>addItem(item)} style={{
+                  padding:"12px 6px",borderRadius:12,cursor:"pointer",
+                  background:inCart?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.85)",
+                  border:`1px solid ${inCart?G.copper:G.border}`,
+                  color:inCart?"#fff":G.dark,minHeight:"auto",transition:"all .15s",
+                  boxShadow:inCart?"0 4px 16px rgba(140,60,16,0.25)":"none",
+                }}>
+                  <div style={{fontSize:11,fontWeight:600,marginBottom:2,lineHeight:1.2}}>{item.name}</div>
+                  <div style={{fontSize:11,color:inCart?"rgba(255,255,255,0.85)":G.copper,fontWeight:500}}>{fmt(item.price)}</div>
+                  {inCart&&<div style={{fontSize:9,marginTop:2,opacity:.85}}>× {inCart.qty}</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Panier + paiement */}
+      {cart.length>0&&(
+        <Card style={{padding:"16px",marginBottom:20,border:`1px solid ${G.copper}35`,background:"rgba(140,60,16,0.03)"}}>
+          <div style={{fontSize:8,letterSpacing:3,color:G.copper,textTransform:"uppercase",marginBottom:12,fontWeight:600}}>Panier</div>
+          {cart.map(item=>(
+            <div key={item.id} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${G.border}`}}>
+              <div style={{flex:1}}>
+                <span style={{fontSize:12,color:G.dark,fontWeight:500}}>{item.name}</span>
+                <span style={{fontSize:10,color:G.copper,marginLeft:8}}>{fmt(item.price*item.qty)}</span>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                <button onClick={()=>removeItem(item.id)} style={{width:26,height:26,borderRadius:"50%",border:`1px solid ${G.border}`,background:"none",cursor:"pointer",fontSize:16,color:G.mid,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto"}}>−</button>
+                <span style={{fontSize:13,fontWeight:600,color:G.dark,minWidth:18,textAlign:"center"}}>{item.qty}</span>
+                <button onClick={()=>addItem(item)} style={{width:26,height:26,borderRadius:"50%",background:G.copper,border:"none",cursor:"pointer",fontSize:16,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto"}}>+</button>
+              </div>
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",margin:"14px 0 16px"}}>
+            <span style={{fontSize:11,color:G.light,letterSpacing:.5}}>Total à encaisser</span>
+            <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:300,color:G.copper}}>{fmt(cartTotal)}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {[
+              {l:"CB",       bg:"linear-gradient(135deg,#243A6A,#1A3060)"},
+              {l:"AMEX",     bg:"linear-gradient(135deg,#256030,#1A5028)"},
+              {l:"Espèces",  bg:`linear-gradient(135deg,${G.copperL},${G.copper})`},
+            ].map(p=>(
+              <button key={p.l} onClick={()=>confirmSale(p.l)} style={{
+                padding:"15px 6px",borderRadius:12,cursor:"pointer",
+                background:p.bg,border:"none",color:"#fff",
+                fontSize:12,fontWeight:700,letterSpacing:.5,
+                boxShadow:"0 4px 16px rgba(0,0,0,0.18)",minHeight:"auto",
+              }}>{p.l}</button>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Transactions du jour */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontSize:9,letterSpacing:2,color:G.light,textTransform:"uppercase"}}>
+          {txs.length} vente{txs.length!==1?"s":""} aujourd'hui
+        </div>
+        {txs.length>0&&(
+          <button onClick={async()=>{
+            setPdfBusy(true);
+            try{await buildCaissePDF(txs,new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));}
+            catch{showToast("Erreur PDF");}
+            setPdfBusy(false);
+          }} style={{background:`rgba(140,60,16,0.08)`,border:`1px solid ${G.copper}30`,color:G.copper,padding:"6px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto"}}>
+            {pdfBusy?"PDF…":"Récap fin de journée"}
+          </button>
+        )}
+      </div>
+
+      {txs.length===0&&(
+        <div style={{textAlign:"center",padding:"32px 0",fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:G.light,fontStyle:"italic"}}>
+          Aucune vente enregistrée aujourd'hui
+        </div>
+      )}
+
+      {txs.map(tx=>{
+        const pc=tx.payment==="CB"?"#1A3A6A":tx.payment==="AMEX"?"#1E5E32":G.copper;
+        return(
+          <Card key={tx.id} style={{padding:"12px 14px",marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                  <span style={{fontSize:8,background:`${pc}15`,color:pc,padding:"2px 8px",borderRadius:10,fontWeight:600,whiteSpace:"nowrap"}}>{tx.payment}</span>
+                  <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:300,color:G.copper}}>{fmt(tx.total)}</span>
+                  <span style={{fontSize:9,color:G.light,marginLeft:"auto"}}>{tx.time}</span>
+                </div>
+                <div style={{fontSize:10,color:G.mid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {tx.items.map(i=>`${i.name}${i.qty>1?` ×${i.qty}`:""}`).join(" · ")}
+                </div>
+              </div>
+              <button onClick={()=>deleteTx(tx.id)} style={{background:"none",border:`1px solid ${G.border}`,color:G.danger,padding:"4px 8px",borderRadius:6,fontSize:12,cursor:"pointer",minHeight:"auto",flexShrink:0}}>×</button>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
