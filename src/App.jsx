@@ -4075,6 +4075,97 @@ function CaisseTab({showToast}){
   const[cashMode,setCashMode]=useState(false);
   const[cashGiven,setCashGiven]=useState("");
 
+  /* ── Export CSV (séparateur ; + BOM UTF-8 pour Excel/Gourmet ERP) ── */
+  const downloadCSV=txsList=>{
+    const today=new Date().toISOString().split("T")[0];
+    const header="Date;Heure;Paiement;Montant EUR;Monnaie rendue EUR;Articles";
+    const rows=txsList.map(tx=>{
+      const items=tx.items.map(i=>`${i.name}${i.qty>1?` x${i.qty}`:""}`).join(" | ");
+      return[
+        today, tx.time, tx.payment,
+        tx.total.toFixed(2).replace(".",","),
+        tx.change!=null?tx.change.toFixed(2).replace(".",","):"",
+        `"${items}"`,
+      ].join(";");
+    });
+    const csv="﻿"+[header,...rows].join("\r\n"); // BOM pour Excel FR
+    const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
+    const a=Object.assign(document.createElement("a"),{href:url,download:`Caisse_${today}.csv`});
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
+  };
+
+  /* ── Export Z-Ticket texte (format clôture caisse normé FR) ── */
+  const downloadZticket=txsList=>{
+    const now=new Date();
+    const dateStr=now.toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+    const timeStr=now.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+    const today=now.toISOString().split("T")[0];
+    const vCB=txsList.filter(t=>t.payment==="CB");
+    const vAM=txsList.filter(t=>t.payment==="AMEX");
+    const vES=txsList.filter(t=>t.payment==="Especes");
+    const tCB=vCB.reduce((s,t)=>s+t.total,0);
+    const tAM=vAM.reduce((s,t)=>s+t.total,0);
+    const tES=vES.reduce((s,t)=>s+t.total,0);
+    const tAL=tCB+tAM+tES;
+    const tEnc=vES.reduce((s,t)=>s+(t.given||t.total),0);
+    const tRen=vES.reduce((s,t)=>s+(t.change||0),0);
+    const f=v=>`${v.toFixed(2).replace(".",",")} EUR`;
+    const p=(s,n)=>String(s).padEnd(n);
+    const r=(s,n)=>String(s).padStart(n);
+    const sep="=".repeat(44);
+    const sep2="-".repeat(44);
+    const lig=(lab,nb,tot)=>`${p(lab,20)}${p(nb>0?`${nb} vente${nb>1?"s":""}`:"-",14)}${r(f(tot),14)}`;
+    const lines=[
+      sep,
+      "      TICKET DE CLOTURE Z",
+      "  ALAIN DUCASSE - MANUFACTURE DE GLACE",
+      sep,
+      "",
+      `Date             : ${dateStr}`,
+      `Heure de cloture : ${timeStr}`,
+      `Reference Z      : Z-${today.replace(/-/g,"")}`,
+      "",
+      sep2,
+      "  RECAPITULATIF DES VENTES",
+      sep2,
+      "",
+      lig("Carte bancaire (CB)",vCB.length,tCB),
+      lig("AMEX",vAM.length,tAM),
+      lig("Especes",vES.length,tES),
+      "",
+      `${p("TOTAL GENERAL",20)}${p(`${txsList.length} vente${txsList.length>1?"s":""}`,14)}${r(f(tAL),14)}`,
+      "",
+      sep2,
+      "  DETAIL ESPECES",
+      sep2,
+      "",
+      `${p("Total encaisse :",32)}${r(f(tEnc),12)}`,
+      `${p("Monnaie rendue :",32)}${r(f(tRen),12)}`,
+      `${p("Net especes :",32)}${r(f(tES),12)}`,
+      "",
+      sep2,
+      "  DETAIL DES TRANSACTIONS",
+      sep2,
+      "",
+      ...txsList.map(tx=>{
+        const it=tx.items.map(i=>`${i.name}${i.qty>1?` x${i.qty}`:""}`).join(", ");
+        const ch=tx.change>0?` (rendu ${f(tx.change)})`:"";
+        return`${tx.time}  ${p(tx.payment,10)} ${r(f(tx.total),12)}${ch}\n        ${it}`;
+      }),
+      "",
+      sep,
+      `  Etabli le ${now.toLocaleDateString("fr-FR")} a ${timeStr}`,
+      "  OutilGlaceAD - Manufacture de Glace",
+      sep,
+    ];
+    const blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=Object.assign(document.createElement("a"),{href:url,download:`Z-Ticket_${today}.txt`});
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
+  };
+
   useEffect(()=>{
     (async()=>{try{const r=await storage.get(todayKey());if(r?.value)setTxs(JSON.parse(r.value));}catch{}}
     )();
@@ -4276,19 +4367,29 @@ function CaisseTab({showToast}){
 
       {/* ── Transactions du jour ── */}
       <div style={{marginTop:24,paddingTop:16,borderTop:`2px solid ${G.border}`}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:8,flexWrap:"wrap"}}>
           <span style={{fontSize:9,color:G.light,letterSpacing:2,textTransform:"uppercase"}}>
             {txs.length} vente{txs.length!==1?"s":""} aujourd'hui
           </span>
           {txs.length>0&&(
-            <button onClick={async()=>{
-              setPdfBusy(true);
-              try{await buildCaissePDF(txs,new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));}
-              catch{showToast("Erreur PDF");}
-              setPdfBusy(false);
-            }} style={{background:"none",border:`1px solid ${G.border}`,color:G.copper,padding:"5px 12px",borderRadius:6,fontSize:10,fontWeight:500,cursor:"pointer",minHeight:"auto"}}>
-              {pdfBusy?"PDF...":"Recapitulatif"}
-            </button>
+            <div style={{display:"flex",gap:6,flexShrink:0}}>
+              <button onClick={async()=>{
+                setPdfBusy(true);
+                try{await buildCaissePDF(txs,new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));}
+                catch{showToast("Erreur PDF");}
+                setPdfBusy(false);
+              }} style={{background:"none",border:`1px solid ${G.border}`,color:G.mid,padding:"5px 10px",borderRadius:6,fontSize:10,fontWeight:500,cursor:"pointer",minHeight:"auto"}}>
+                {pdfBusy?"...":"PDF"}
+              </button>
+              <button onClick={()=>downloadCSV(txs)}
+                style={{background:"none",border:`1px solid ${G.border}`,color:G.mid,padding:"5px 10px",borderRadius:6,fontSize:10,fontWeight:500,cursor:"pointer",minHeight:"auto"}}>
+                CSV
+              </button>
+              <button onClick={()=>downloadZticket(txs)}
+                style={{background:`rgba(140,60,16,0.08)`,border:`1px solid ${G.copper}30`,color:G.copper,padding:"5px 10px",borderRadius:6,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto"}}>
+                Z-Ticket
+              </button>
+            </div>
           )}
         </div>
 
