@@ -668,19 +668,40 @@ const G = {
 };
 
 /* ─── CAISSE — Produits et tarifs ─────────────────── */
+// TVA : glaces à emporter 5,5% | boissons consommées sur place 10%
 const CAISSE_ITEMS=[
-  {id:"cornet",    cat:"Format",  name:"Cornet",      price:7   },
-  {id:"petit_pot", cat:"Format",  name:"Petit pot",   price:7   },
-  {id:"gros_pot",  cat:"Format",  name:"Gros pot",    price:9   },
-  {id:"bento_sm",  cat:"Format",  name:"Bento 600ml", price:22  },
-  {id:"bento_lg",  cat:"Format",  name:"Bento 1.2L",  price:42  },
-  {id:"expresso",  cat:"Boisson", name:"Expresso",    price:3.5 },
-  {id:"cappuccino",cat:"Boisson", name:"Cappuccino",  price:6   },
-  {id:"affogato",  cat:"Boisson", name:"Affogato",    price:10  },
-  {id:"perrier",   cat:"Boisson", name:"Perrier",     price:3   },
-  {id:"eau",       cat:"Boisson", name:"Eau",         price:3   },
-  {id:"jus",       cat:"Boisson", name:"Jus",         price:6   },
+  {id:"cornet",    cat:"Format",  name:"Cornet",      price:7,   tva:5.5},
+  {id:"petit_pot", cat:"Format",  name:"Petit pot",   price:7,   tva:5.5},
+  {id:"gros_pot",  cat:"Format",  name:"Gros pot",    price:9,   tva:5.5},
+  {id:"bento_sm",  cat:"Format",  name:"Bento 600ml", price:22,  tva:5.5},
+  {id:"bento_lg",  cat:"Format",  name:"Bento 1.2L",  price:42,  tva:5.5},
+  {id:"expresso",  cat:"Boisson", name:"Expresso",    price:3.5, tva:10 },
+  {id:"cappuccino",cat:"Boisson", name:"Cappuccino",  price:6,   tva:10 },
+  {id:"affogato",  cat:"Boisson", name:"Affogato",    price:10,  tva:10 },
+  {id:"perrier",   cat:"Boisson", name:"Perrier",     price:3,   tva:10 },
+  {id:"eau",       cat:"Boisson", name:"Eau",         price:3,   tva:10 },
+  {id:"jus",       cat:"Boisson", name:"Jus",         price:6,   tva:10 },
 ];
+
+// Ventilation TVA à partir d'une liste de transactions
+// Les prix sont TTC — TVA = TTC * taux / (100 + taux)
+const computeTVA=txs=>{
+  const map={};
+  txs.forEach(tx=>{
+    (tx.items||[]).forEach(item=>{
+      const prod=CAISSE_ITEMS.find(p=>p.id===item.id);
+      const rate=prod?.tva??10;
+      const ttc=+(item.price*item.qty).toFixed(2);
+      const tva=+(ttc*rate/(100+rate)).toFixed(2);
+      const ht =+(ttc-tva).toFixed(2);
+      if(!map[rate])map[rate]={ht:0,tva:0,ttc:0};
+      map[rate].ht =+(map[rate].ht +ht ).toFixed(2);
+      map[rate].tva=+(map[rate].tva+tva).toFixed(2);
+      map[rate].ttc=+(map[rate].ttc+ttc).toFixed(2);
+    });
+  });
+  return map; // {5.5:{ht,tva,ttc}, 10:{ht,tva,ttc}}
+};
 
 const buildCaissePDF=async(transactions,dateStr)=>{
   const{jsPDF}=await loadJsPDF();
@@ -696,43 +717,85 @@ const buildCaissePDF=async(transactions,dateStr)=>{
   T(["helvetica","normal"],8,[120,90,60],dateStr,R,10,{align:"right"});
   y=34;
 
-  const totCB  =transactions.filter(t=>t.payment==="CB").reduce((s,t)=>s+t.total,0);
-  const totAMEX=transactions.filter(t=>t.payment==="AMEX").reduce((s,t)=>s+t.total,0);
-  const totEsp =transactions.filter(t=>t.payment==="Especes").reduce((s,t)=>s+t.total,0);
-  const totAll =totCB+totAMEX+totEsp;
+  const vCB =transactions.filter(t=>t.payment==="CB");
+  const vAM =transactions.filter(t=>t.payment==="AMEX");
+  const vES =transactions.filter(t=>t.payment==="Especes");
+  const totCB =vCB.reduce((s,t)=>s+t.total,0);
+  const totAMEX=vAM.reduce((s,t)=>s+t.total,0);
+  const totEsp =vES.reduce((s,t)=>s+t.total,0);
+  const totAll =+(totCB+totAMEX+totEsp).toFixed(2);
+  const tva    =computeTVA(transactions);
+  const fE=v=>`${v.toFixed(2)} EUR`;
 
-  // Blocs totaux
-  [[M,"CB",totCB,[26,58,106]],[M+48,"AMEX",totAMEX,[30,94,50]],[M+96,"Espèces",totEsp,[148,82,8]]].forEach(([x,l,v,c])=>{
-    BG(x,y,40,28,[250,245,238]);
-    T(["helvetica","bold"],7,[100,70,40],l,x+4,y+7);
-    T(["times","normal"],15,c,`${v.toFixed(2)} €`,x+4,y+18);
+  // Modes de règlement — alignés sur le format clôture Gourmet ERP
+  const modes=[
+    {l:"Carte bancaire (CB)",nb:vCB.length,v:totCB,c:[26,58,106]},
+    {l:"American Express",   nb:vAM.length,v:totAMEX,c:[30,94,50]},
+    {l:"Especes",            nb:vES.length,v:totEsp, c:[148,82,8]},
+  ];
+  BG(M,y,R-M,8,[235,222,205]);
+  T(["helvetica","bold"],7,[80,48,20],"MODE DE REGLEMENT",M+2,y+5.5);
+  T(["helvetica","bold"],7,[80,48,20],"NB",M+110,y+5.5,{align:"right"});
+  T(["helvetica","bold"],7,[80,48,20],"MONTANT REEL",R-2,y+5.5,{align:"right"});
+  y+=10;
+  modes.forEach((m,i)=>{
+    if(i%2===0)BG(M,y-2,R-M,8,[250,248,244]);
+    T(["helvetica","normal"],8,[40,30,20],m.l,M+2,y+3.5);
+    T(["helvetica","normal"],8,[80,60,40],String(m.nb),M+110,y+3.5,{align:"right"});
+    T(["helvetica","bold"],9,m.c,fE(m.v),R-2,y+3.5,{align:"right"});
+    y+=9;
   });
-  BG(M+142,y,R-M-142,28,[168,82,46]);
-  T(["helvetica","bold"],7,[255,255,255],"TOTAL",M+146,y+7);
-  T(["times","normal"],15,[255,255,255],`${totAll.toFixed(2)} €`,M+146,y+18);
-  y+=36;
+  y+=2;HR([190,168,140],0.5);y+=5;
+  T(["helvetica","bold"],10,[168,82,46],`TOTAL DE LA CAISSE   ${fE(totAll)}`,R-2,y,{align:"right"});
+  y+=12;
 
-  T(["helvetica","bold"],8,[100,70,40],"DÉTAIL DES TRANSACTIONS",M,y);
+  // Détail TVA (format Gourmet ERP : Base TVA / Taux / Montant TVA)
+  if(Object.keys(tva).length>0){
+    T(["helvetica","bold"],8,[100,70,40],"DETAIL T.V.A.",M,y);
+    y+=6;HR([190,168,140],0.5);y+=4;
+    BG(M,y,R-M,8,[235,222,205]);
+    T(["helvetica","bold"],6.5,[80,48,20],"TAUX",M+2,y+5.5);
+    T(["helvetica","bold"],6.5,[80,48,20],"BASE H.T.",M+60,y+5.5,{align:"right"});
+    T(["helvetica","bold"],6.5,[80,48,20],"MONTANT TVA",M+118,y+5.5,{align:"right"});
+    T(["helvetica","bold"],6.5,[80,48,20],"TOTAL TTC",R-2,y+5.5,{align:"right"});
+    y+=10;
+    let totHT=0,totTVA=0;
+    Object.entries(tva).sort(([a],[b])=>+a-+b).forEach(([rate,vals],i)=>{
+      if(i%2===0)BG(M,y-2,R-M,8,[250,248,244]);
+      T(["helvetica","normal"],8,[60,50,40],`${rate} %`,M+2,y+3.5);
+      T(["helvetica","normal"],8,[60,50,40],fE(vals.ht),  M+60, y+3.5,{align:"right"});
+      T(["helvetica","normal"],8,[60,50,40],fE(vals.tva), M+118,y+3.5,{align:"right"});
+      T(["helvetica","bold"],  8,[60,50,40],fE(vals.ttc), R-2,  y+3.5,{align:"right"});
+      totHT+=vals.ht;totTVA+=vals.tva;y+=9;
+    });
+    HR([190,168,140],0.5);y+=5;
+    T(["helvetica","bold"],8,[168,82,46],`Total HT : ${fE(totHT)}   TVA : ${fE(totTVA)}   TTC : ${fE(totAll)}`,R-2,y,{align:"right"});
+    y+=12;
+  }
+
+  // Détail des transactions
+  T(["helvetica","bold"],8,[100,70,40],"DETAIL DES TRANSACTIONS",M,y);
   y+=6;HR([190,168,140],0.5);y+=4;
   BG(M,y,R-M,8,[235,222,205]);
   T(["helvetica","bold"],6.5,[80,48,20],"HEURE",M+2,y+5.5);
   T(["helvetica","bold"],6.5,[80,48,20],"ARTICLES",M+18,y+5.5);
-  T(["helvetica","bold"],6.5,[80,48,20],"PAIEMENT",M+138,y+5.5);
-  T(["helvetica","bold"],6.5,[80,48,20],"MONTANT",R-2,y+5.5,{align:"right"});
+  T(["helvetica","bold"],6.5,[80,48,20],"PAIEMENT",M+130,y+5.5);
+  T(["helvetica","bold"],6.5,[80,48,20],"TTC",R-2,y+5.5,{align:"right"});
   y+=10;
 
   transactions.forEach((tx,i)=>{
     if(y>272){doc.addPage();y=20;}
     if(i%2===0)BG(M,y-2,R-M,8,[250,248,244]);
-    const items=tx.items.map(it=>`${it.name}${it.qty>1?` ×${it.qty}`:""}`).join(", ");
+    const items=tx.items.map(it=>`${it.name}${it.qty>1?` x${it.qty}`:""}`).join(", ");
+    const ch=tx.change>0?` (rendu ${fE(tx.change)})`:"";
     T(["helvetica","normal"],7,[60,50,40],tx.time,M+2,y+3.5);
-    T(["helvetica","normal"],7,[60,50,40],items.substring(0,62),M+18,y+3.5);
-    T(["helvetica","normal"],7,[60,50,40],tx.payment,M+138,y+3.5);
-    T(["helvetica","bold"],8,[168,82,46],`${tx.total.toFixed(2)} €`,R-2,y+3.5,{align:"right"});
+    T(["helvetica","normal"],7,[60,50,40],items.substring(0,58),M+18,y+3.5);
+    T(["helvetica","normal"],7,[60,50,40],tx.payment+ch,M+130,y+3.5);
+    T(["helvetica","bold"],8,[168,82,46],fE(tx.total),R-2,y+3.5,{align:"right"});
     y+=8;
   });
   y+=4;HR([190,168,140],0.5);y+=6;
-  T(["helvetica","bold"],10,[168,82,46],`TOTAL JOURNÉE : ${totAll.toFixed(2)} €`,R-2,y,{align:"right"});
+  T(["helvetica","bold"],10,[168,82,46],`TOTAL JOURNEE : ${fE(totAll)}`,R-2,y,{align:"right"});
   doc.save(`Caisse_${dateStr.replace(/[^0-9]/g,"-").replace(/-+/g,"-")}.pdf`);
 };
 
@@ -4075,27 +4138,27 @@ function CaisseTab({showToast}){
   const[cashMode,setCashMode]=useState(false);
   const[cashGiven,setCashGiven]=useState("");
 
-  /* ── Export CSV (séparateur ; + BOM UTF-8 pour Excel/Gourmet ERP) ── */
+  /* ── Export CSV avec TVA (séparateur ; + BOM UTF-8 pour Excel/Gourmet ERP) ── */
   const downloadCSV=txsList=>{
     const today=new Date().toISOString().split("T")[0];
-    const header="Date;Heure;Paiement;Montant EUR;Monnaie rendue EUR;Articles";
+    const header="Date;Heure;Mode reglement;Montant TTC;Base HT 5,5%;TVA 5,5%;Base HT 10%;TVA 10%;Monnaie rendue;Articles";
     const rows=txsList.map(tx=>{
+      const tvaMap=computeTVA([tx]);
+      const ht55=tvaMap[5.5]?.ht??0; const t55=tvaMap[5.5]?.tva??0;
+      const ht10=tvaMap[10]?.ht??0;  const t10=tvaMap[10]?.tva??0;
       const items=tx.items.map(i=>`${i.name}${i.qty>1?` x${i.qty}`:""}`).join(" | ");
-      return[
-        today, tx.time, tx.payment,
-        tx.total.toFixed(2).replace(".",","),
-        tx.change!=null?tx.change.toFixed(2).replace(".",","):"",
-        `"${items}"`,
-      ].join(";");
+      const c=(v)=>v.toFixed(2).replace(".",",");
+      return[today,tx.time,tx.payment,c(tx.total),c(ht55),c(t55),c(ht10),c(t10),
+        tx.change!=null?c(tx.change):"",`"${items}"`].join(";");
     });
-    const csv="﻿"+[header,...rows].join("\r\n"); // BOM pour Excel FR
+    const csv="﻿"+[header,...rows].join("\r\n");
     const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
     const a=Object.assign(document.createElement("a"),{href:url,download:`Caisse_${today}.csv`});
     document.body.appendChild(a);a.click();document.body.removeChild(a);
     setTimeout(()=>URL.revokeObjectURL(url),5000);
   };
 
-  /* ── Export Z-Ticket texte (format clôture caisse normé FR) ── */
+  /* ── Export Z-Ticket (calqué sur le format clôture Gourmet ERP) ── */
   const downloadZticket=txsList=>{
     const now=new Date();
     const dateStr=now.toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
@@ -4107,19 +4170,28 @@ function CaisseTab({showToast}){
     const tCB=vCB.reduce((s,t)=>s+t.total,0);
     const tAM=vAM.reduce((s,t)=>s+t.total,0);
     const tES=vES.reduce((s,t)=>s+t.total,0);
-    const tAL=tCB+tAM+tES;
+    const tAL=+(tCB+tAM+tES).toFixed(2);
     const tEnc=vES.reduce((s,t)=>s+(t.given||t.total),0);
     const tRen=vES.reduce((s,t)=>s+(t.change||0),0);
+    const tva=computeTVA(txsList);
     const f=v=>`${v.toFixed(2).replace(".",",")} EUR`;
     const p=(s,n)=>String(s).padEnd(n);
     const r=(s,n)=>String(s).padStart(n);
-    const sep="=".repeat(44);
-    const sep2="-".repeat(44);
-    const lig=(lab,nb,tot)=>`${p(lab,20)}${p(nb>0?`${nb} vente${nb>1?"s":""}`:"-",14)}${r(f(tot),14)}`;
+    const sep="=".repeat(48);
+    const sep2="-".repeat(48);
+    const lig=(lab,nb,tot)=>`${p(lab,22)}${p(nb>0?`${nb} vente${nb>1?"s":""}`:"-",12)}${r(f(tot),14)}`;
+
+    // Lignes TVA
+    const tvaLines=Object.entries(tva).sort(([a],[b])=>+a-+b).map(([rate,v])=>
+      `${p(`TVA ${rate} %`,22)}  ${p(`Base HT : ${f(v.ht)}`,26)}  ${r(f(v.tva),12)}`
+    );
+    const totHT=Object.values(tva).reduce((s,v)=>s+v.ht,0);
+    const totTVA=Object.values(tva).reduce((s,v)=>s+v.tva,0);
+
     const lines=[
       sep,
-      "      TICKET DE CLOTURE Z",
-      "  ALAIN DUCASSE - MANUFACTURE DE GLACE",
+      "        TICKET DE CLOTURE Z",
+      "    ALAIN DUCASSE - MANUFACTURE DE GLACE",
       sep,
       "",
       `Date             : ${dateStr}`,
@@ -4127,22 +4199,32 @@ function CaisseTab({showToast}){
       `Reference Z      : Z-${today.replace(/-/g,"")}`,
       "",
       sep2,
-      "  RECAPITULATIF DES VENTES",
+      "  MODES DE REGLEMENT",
       sep2,
       "",
       lig("Carte bancaire (CB)",vCB.length,tCB),
-      lig("AMEX",vAM.length,tAM),
-      lig("Especes",vES.length,tES),
+      lig("American Express",   vAM.length,tAM),
+      lig("Especes",            vES.length,tES),
       "",
-      `${p("TOTAL GENERAL",20)}${p(`${txsList.length} vente${txsList.length>1?"s":""}`,14)}${r(f(tAL),14)}`,
+      `${p("TOTAL DE LA CAISSE",22)}${p(`${txsList.length} vente${txsList.length>1?"s":""}`,12)}${r(f(tAL),14)}`,
       "",
       sep2,
       "  DETAIL ESPECES",
       sep2,
       "",
-      `${p("Total encaisse :",32)}${r(f(tEnc),12)}`,
-      `${p("Monnaie rendue :",32)}${r(f(tRen),12)}`,
-      `${p("Net especes :",32)}${r(f(tES),12)}`,
+      `${p("Montant theorique :",36)}${r(f(tES),12)}`,
+      `${p("Total encaisse :",  36)}${r(f(tEnc),12)}`,
+      `${p("Monnaie rendue :",  36)}${r(f(tRen),12)}`,
+      "",
+      sep2,
+      "  DETAIL T.V.A.",
+      sep2,
+      "",
+      ...tvaLines,
+      "",
+      `${p("Total H.T. :",36)}${r(f(totHT),12)}`,
+      `${p("Total T.V.A. :",36)}${r(f(totTVA),12)}`,
+      `${p("Total T.T.C. :",36)}${r(f(tAL),12)}`,
       "",
       sep2,
       "  DETAIL DES TRANSACTIONS",
@@ -4151,7 +4233,7 @@ function CaisseTab({showToast}){
       ...txsList.map(tx=>{
         const it=tx.items.map(i=>`${i.name}${i.qty>1?` x${i.qty}`:""}`).join(", ");
         const ch=tx.change>0?` (rendu ${f(tx.change)})`:"";
-        return`${tx.time}  ${p(tx.payment,10)} ${r(f(tx.total),12)}${ch}\n        ${it}`;
+        return`${tx.time}  ${p(tx.payment,14)} ${r(f(tx.total),12)}${ch}\n        ${it}`;
       }),
       "",
       sep,
