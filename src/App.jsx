@@ -698,7 +698,7 @@ const buildCaissePDF=async(transactions,dateStr)=>{
 
   const totCB  =transactions.filter(t=>t.payment==="CB").reduce((s,t)=>s+t.total,0);
   const totAMEX=transactions.filter(t=>t.payment==="AMEX").reduce((s,t)=>s+t.total,0);
-  const totEsp =transactions.filter(t=>t.payment==="Espèces").reduce((s,t)=>s+t.total,0);
+  const totEsp =transactions.filter(t=>t.payment==="Especes").reduce((s,t)=>s+t.total,0);
   const totAll =totCB+totAMEX+totEsp;
 
   // Blocs totaux
@@ -4067,21 +4067,20 @@ function SendDocModal({docType, onSend, onCancel}){
 ═══════════════════════════ */
 function CaisseTab({showToast}){
   const todayKey=()=>`ad9_caisse_${new Date().toISOString().split("T")[0]}`;
-  const todayFr =new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
+  const todayFr=new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
 
-  const[cart,setCart]   =useState([]);
-  const[txs,setTxs]     =useState([]);
+  const[cart,setCart]    =useState([]);
+  const[txs,setTxs]      =useState([]);
   const[pdfBusy,setPdfBusy]=useState(false);
+  const[cashMode,setCashMode]=useState(false);
+  const[cashGiven,setCashGiven]=useState("");
 
   useEffect(()=>{
-    (async()=>{
-      try{const r=await storage.get(todayKey());if(r?.value)setTxs(JSON.parse(r.value));}catch{}
-    })();
+    (async()=>{try{const r=await storage.get(todayKey());if(r?.value)setTxs(JSON.parse(r.value));}catch{}}
+    )();
   },[]);
 
-  const saveTxs=async(list)=>{
-    try{await storage.set(todayKey(),JSON.stringify(list));}catch{}
-  };
+  const saveTxs=async list=>{try{await storage.set(todayKey(),JSON.stringify(list));}catch{}};
 
   const addItem=item=>setCart(prev=>{
     const ex=prev.find(i=>i.id===item.id);
@@ -4097,61 +4096,73 @@ function CaisseTab({showToast}){
   const cartTotal=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const fmt=v=>`${v.toFixed(2).replace(".",",")} €`;
 
-  const confirmSale=async payment=>{
+  // Rendu monnaie
+  const given=parseFloat(String(cashGiven).replace(",","."))||0;
+  const change=+(given-cartTotal).toFixed(2);
+  const changeOk=given>=cartTotal&&given>0;
+
+  const confirmSale=async(payment,givenAmt)=>{
     if(!cart.length)return;
-    const tx={id:Date.now().toString(),items:cart.map(i=>({id:i.id,name:i.name,price:i.price,qty:i.qty})),total:cartTotal,payment,time:new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})};
+    const tx={
+      id:Date.now().toString(),
+      items:cart.map(i=>({id:i.id,name:i.name,price:i.price,qty:i.qty})),
+      total:cartTotal,
+      payment,
+      ...(givenAmt!=null?{given:givenAmt,change:+(givenAmt-cartTotal).toFixed(2)}:{}),
+      time:new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}),
+    };
     const next=[tx,...txs];
-    setTxs(next);setCart([]);
+    setTxs(next);setCart([]);setCashMode(false);setCashGiven("");
     await saveTxs(next);
-    showToast(`Vente réglée — ${fmt(cartTotal)} ${payment}`);
+    showToast(`Vente reglee - ${fmt(cartTotal)} - ${payment}`);
   };
 
-  const deleteTx=async id=>{
-    const next=txs.filter(t=>t.id!==id);setTxs(next);await saveTxs(next);
-  };
+  const deleteTx=async id=>{const next=txs.filter(t=>t.id!==id);setTxs(next);await saveTxs(next);};
 
   const totCB  =txs.filter(t=>t.payment==="CB").reduce((s,t)=>s+t.total,0);
   const totAMEX=txs.filter(t=>t.payment==="AMEX").reduce((s,t)=>s+t.total,0);
-  const totEsp =txs.filter(t=>t.payment==="Espèces").reduce((s,t)=>s+t.total,0);
+  const totEsp =txs.filter(t=>t.payment==="Especes").reduce((s,t)=>s+t.total,0);
   const totDay =totCB+totAMEX+totEsp;
 
   const cats=[...new Set(CAISSE_ITEMS.map(i=>i.cat))];
+  const BILLS=[5,10,20,50,100,200];
+  const quickBills=BILLS.filter(b=>b>=cartTotal).slice(0,4);
+
+  /* ── Styles réutilisables ── */
+  const rowSep={paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${G.border}`};
+  const circleBtn=(bg,col)=>({width:28,height:28,borderRadius:"50%",background:bg,border:bg==="none"?`1px solid ${G.border}`:"none",cursor:"pointer",fontSize:15,color:col,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto",lineHeight:1,flexShrink:0});
 
   return(
     <div style={{animation:"fadein .25s ease"}}>
 
-      {/* En-tête + totaux jour */}
-      <div style={{marginBottom:20,paddingBottom:16,borderBottom:`1px solid ${G.border}`}}>
-        <div style={{fontSize:8,letterSpacing:4,color:G.copper,textTransform:"uppercase",marginBottom:4}}>Aujourd'hui — {todayFr}</div>
-        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:G.dark,marginBottom:14}}>Caisse du jour</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-          {[{l:"CB",v:totCB,c:"#1A3A6A"},{l:"AMEX",v:totAMEX,c:"#1E5E32"},{l:"Espèces",v:totEsp,c:"#945208"},{l:"Total",v:totDay,c:G.copper}].map(s=>(
-            <Card key={s.l} style={{padding:"10px 6px",textAlign:"center",border:`1px solid ${s.c}22`}}>
-              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:300,color:s.c,lineHeight:1}}>{fmt(s.v)}</div>
-              <div style={{fontSize:7,letterSpacing:1.5,color:G.light,textTransform:"uppercase",marginTop:3}}>{s.l}</div>
-            </Card>
-          ))}
-        </div>
+      {/* ── Totaux du jour ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:22,paddingBottom:18,borderBottom:`1px solid ${G.border}`}}>
+        {[{l:"CB",v:totCB,c:"#1A3A6A"},{l:"AMEX",v:totAMEX,c:"#1E5E32"},{l:"Especes",v:totEsp,c:"#945208"},{l:"Total",v:totDay,c:G.copper}].map(s=>(
+          <div key={s.l} style={{textAlign:"center",padding:"10px 4px",borderRadius:10,background:`${s.c}08`,border:`1px solid ${s.c}18`}}>
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:15,fontWeight:300,color:s.c,lineHeight:1,marginBottom:3}}>{fmt(s.v)}</div>
+            <div style={{fontSize:7,letterSpacing:1.5,color:G.light,textTransform:"uppercase"}}>{s.l}</div>
+          </div>
+        ))}
       </div>
 
-      {/* Produits */}
+      {/* ── Produits ── */}
       {cats.map(cat=>(
-        <div key={cat} style={{marginBottom:18}}>
-          <div style={{fontSize:8,letterSpacing:3,color:G.copper,textTransform:"uppercase",marginBottom:10,fontWeight:600,paddingBottom:6,borderBottom:`1px solid ${G.border}`}}>{cat}</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+        <div key={cat} style={{marginBottom:16}}>
+          <div style={{fontSize:7,letterSpacing:3,color:G.light,textTransform:"uppercase",marginBottom:8,fontWeight:500}}>{cat}</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
             {CAISSE_ITEMS.filter(i=>i.cat===cat).map(item=>{
               const inCart=cart.find(c=>c.id===item.id);
               return(
                 <button key={item.id} onClick={()=>addItem(item)} style={{
-                  padding:"12px 6px",borderRadius:12,cursor:"pointer",
-                  background:inCart?`linear-gradient(135deg,${G.copperL},${G.copper})`:"rgba(255,251,246,0.85)",
+                  padding:"11px 6px",borderRadius:10,cursor:"pointer",
+                  background:inCart?G.copper:"rgba(255,255,255,0.7)",
                   border:`1px solid ${inCart?G.copper:G.border}`,
-                  color:inCart?"#fff":G.dark,minHeight:"auto",transition:"all .15s",
-                  boxShadow:inCart?"0 4px 16px rgba(140,60,16,0.25)":"none",
+                  color:inCart?"#fff":G.dark,
+                  minHeight:"auto",transition:"background .12s,border-color .12s",
                 }}>
-                  <div style={{fontSize:11,fontWeight:600,marginBottom:2,lineHeight:1.2}}>{item.name}</div>
-                  <div style={{fontSize:11,color:inCart?"rgba(255,255,255,0.85)":G.copper,fontWeight:500}}>{fmt(item.price)}</div>
-                  {inCart&&<div style={{fontSize:9,marginTop:2,opacity:.85}}>× {inCart.qty}</div>}
+                  <div style={{fontSize:11,fontWeight:500,marginBottom:2,lineHeight:1.2}}>{item.name}</div>
+                  <div style={{fontSize:10,color:inCart?"rgba(255,255,255,0.8)":G.copper,fontWeight:600}}>{fmt(item.price)}</div>
+                  {inCart&&<div style={{fontSize:9,marginTop:2,color:"rgba(255,255,255,0.65)"}}>x{inCart.qty}</div>}
                 </button>
               );
             })}
@@ -4159,87 +4170,158 @@ function CaisseTab({showToast}){
         </div>
       ))}
 
-      {/* Panier + paiement */}
-      {cart.length>0&&(
-        <Card style={{padding:"16px",marginBottom:20,border:`1px solid ${G.copper}35`,background:"rgba(140,60,16,0.03)"}}>
-          <div style={{fontSize:8,letterSpacing:3,color:G.copper,textTransform:"uppercase",marginBottom:12,fontWeight:600}}>Panier</div>
-          {cart.map(item=>(
-            <div key={item.id} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${G.border}`}}>
-              <div style={{flex:1}}>
-                <span style={{fontSize:12,color:G.dark,fontWeight:500}}>{item.name}</span>
-                <span style={{fontSize:10,color:G.copper,marginLeft:8}}>{fmt(item.price*item.qty)}</span>
-              </div>
+      {/* ── Panier + paiement ── */}
+      {cart.length>0&&!cashMode&&(
+        <div style={{marginTop:20,paddingTop:16,borderTop:`2px solid ${G.border}`}}>
+          {cart.map((item,i)=>(
+            <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,...(i<cart.length-1?rowSep:{})}}>
+              <span style={{flex:1,fontSize:12,color:G.dark}}>{item.name}</span>
               <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                <button onClick={()=>removeItem(item.id)} style={{width:26,height:26,borderRadius:"50%",border:`1px solid ${G.border}`,background:"none",cursor:"pointer",fontSize:16,color:G.mid,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto"}}>−</button>
-                <span style={{fontSize:13,fontWeight:600,color:G.dark,minWidth:18,textAlign:"center"}}>{item.qty}</span>
-                <button onClick={()=>addItem(item)} style={{width:26,height:26,borderRadius:"50%",background:G.copper,border:"none",cursor:"pointer",fontSize:16,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",minHeight:"auto"}}>+</button>
+                <button onClick={()=>removeItem(item.id)} style={circleBtn("none",G.mid)}>-</button>
+                <span style={{fontSize:12,fontWeight:600,color:G.dark,minWidth:16,textAlign:"center"}}>{item.qty}</span>
+                <button onClick={()=>addItem(item)} style={circleBtn(G.copper,"#fff")}>+</button>
+                <span style={{fontSize:11,color:G.copper,fontWeight:500,minWidth:50,textAlign:"right"}}>{fmt(item.price*item.qty)}</span>
               </div>
             </div>
           ))}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",margin:"14px 0 16px"}}>
-            <span style={{fontSize:11,color:G.light,letterSpacing:.5}}>Total à encaisser</span>
-            <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:300,color:G.copper}}>{fmt(cartTotal)}</span>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:14,paddingTop:12,borderTop:`1px solid ${G.border}`}}>
+            <span style={{fontSize:9,color:G.light,letterSpacing:.5,textTransform:"uppercase"}}>Total</span>
+            <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:34,fontWeight:300,color:G.dark}}>{fmt(cartTotal)}</span>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            {[
-              {l:"CB",       bg:"linear-gradient(135deg,#243A6A,#1A3060)"},
-              {l:"AMEX",     bg:"linear-gradient(135deg,#256030,#1A5028)"},
-              {l:"Espèces",  bg:`linear-gradient(135deg,${G.copperL},${G.copper})`},
-            ].map(p=>(
-              <button key={p.l} onClick={()=>confirmSale(p.l)} style={{
-                padding:"15px 6px",borderRadius:12,cursor:"pointer",
-                background:p.bg,border:"none",color:"#fff",
-                fontSize:12,fontWeight:700,letterSpacing:.5,
-                boxShadow:"0 4px 16px rgba(0,0,0,0.18)",minHeight:"auto",
-              }}>{p.l}</button>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:14}}>
+            <button onClick={()=>confirmSale("CB")} style={{padding:"14px 4px",borderRadius:10,cursor:"pointer",background:"#1A3060",border:"none",color:"#fff",fontSize:12,fontWeight:600,minHeight:"auto"}}>CB</button>
+            <button onClick={()=>confirmSale("AMEX")} style={{padding:"14px 4px",borderRadius:10,cursor:"pointer",background:"#1A5028",border:"none",color:"#fff",fontSize:12,fontWeight:600,minHeight:"auto"}}>AMEX</button>
+            <button onClick={()=>setCashMode(true)} style={{padding:"14px 4px",borderRadius:10,cursor:"pointer",background:G.copper,border:"none",color:"#fff",fontSize:12,fontWeight:600,minHeight:"auto"}}>Especes</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rendu monnaie (Especes seulement) ── */}
+      {cart.length>0&&cashMode&&(
+        <div style={{marginTop:20,paddingTop:16,borderTop:`2px solid ${G.border}`}}>
+          {/* Rappel total */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:18}}>
+            <span style={{fontSize:9,color:G.light,textTransform:"uppercase",letterSpacing:.5}}>Total</span>
+            <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:34,fontWeight:300,color:G.dark}}>{fmt(cartTotal)}</span>
+          </div>
+
+          {/* Raccourcis billets */}
+          <div style={{fontSize:9,color:G.mid,marginBottom:8,letterSpacing:.5}}>Montant remis</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+            <button onClick={()=>setCashGiven(String(cartTotal))} style={{
+              padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:500,
+              background:given===cartTotal&&given>0?G.copper:`rgba(255,255,255,0.7)`,
+              border:`1px solid ${given===cartTotal&&given>0?G.copper:G.border}`,
+              color:given===cartTotal&&given>0?"#fff":G.dark,minHeight:"auto",transition:"all .12s",
+            }}>Exact</button>
+            {quickBills.map(b=>(
+              <button key={b} onClick={()=>setCashGiven(String(b))} style={{
+                padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:500,
+                background:given===b?G.copper:`rgba(255,255,255,0.7)`,
+                border:`1px solid ${given===b?G.copper:G.border}`,
+                color:given===b?"#fff":G.dark,minHeight:"auto",transition:"all .12s",
+              }}>{b} €</button>
             ))}
           </div>
-        </Card>
+          <input
+            type="number" inputMode="decimal"
+            value={cashGiven}
+            onChange={e=>setCashGiven(e.target.value)}
+            placeholder="Autre montant..."
+            style={{
+              width:"100%",padding:"12px 14px",
+              border:`1.5px solid ${cashGiven?(changeOk?"rgba(30,94,50,0.5)":"rgba(122,16,8,0.4)"):G.borderS}`,
+              borderRadius:8,fontSize:17,fontWeight:500,
+              background:"rgba(255,251,246,0.9)",color:G.dark,minHeight:"auto",
+              outline:"none",
+            }}
+          />
+
+          {/* Affichage monnaie */}
+          {cashGiven&&(
+            <div style={{
+              marginTop:12,padding:"14px 16px",borderRadius:10,
+              background:changeOk?"rgba(30,94,50,0.06)":"rgba(122,16,8,0.05)",
+              border:`1px solid ${changeOk?"rgba(30,94,50,0.2)":"rgba(122,16,8,0.15)"}`,
+              display:"flex",justifyContent:"space-between",alignItems:"baseline",
+            }}>
+              <span style={{fontSize:9,color:changeOk?"#1E5E32":"#7A1008",textTransform:"uppercase",letterSpacing:.5,fontWeight:600}}>
+                {changeOk?"Monnaie a rendre":"Montant insuffisant"}
+              </span>
+              <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:300,color:changeOk?"#1E5E32":"#7A1008"}}>
+                {changeOk?fmt(change):fmt(cartTotal-given)}
+              </span>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:14}}>
+            <button onClick={()=>{setCashMode(false);setCashGiven("");}} style={{
+              padding:"13px",borderRadius:10,cursor:"pointer",
+              background:"none",border:`1px solid ${G.border}`,color:G.mid,
+              fontSize:12,fontWeight:500,minHeight:"auto",
+            }}>Annuler</button>
+            <button
+              disabled={!changeOk}
+              onClick={()=>confirmSale("Especes",given)}
+              style={{
+                padding:"13px",borderRadius:10,cursor:changeOk?"pointer":"default",
+                background:changeOk?G.copper:"rgba(140,60,16,0.12)",
+                border:"none",color:changeOk?"#fff":"rgba(140,60,16,0.3)",
+                fontSize:12,fontWeight:600,minHeight:"auto",transition:"all .12s",
+              }}>Valider la vente</button>
+          </div>
+        </div>
       )}
 
-      {/* Transactions du jour */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <div style={{fontSize:9,letterSpacing:2,color:G.light,textTransform:"uppercase"}}>
-          {txs.length} vente{txs.length!==1?"s":""} aujourd'hui
+      {/* ── Transactions du jour ── */}
+      <div style={{marginTop:24,paddingTop:16,borderTop:`2px solid ${G.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <span style={{fontSize:9,color:G.light,letterSpacing:2,textTransform:"uppercase"}}>
+            {txs.length} vente{txs.length!==1?"s":""} aujourd'hui
+          </span>
+          {txs.length>0&&(
+            <button onClick={async()=>{
+              setPdfBusy(true);
+              try{await buildCaissePDF(txs,new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));}
+              catch{showToast("Erreur PDF");}
+              setPdfBusy(false);
+            }} style={{background:"none",border:`1px solid ${G.border}`,color:G.copper,padding:"5px 12px",borderRadius:6,fontSize:10,fontWeight:500,cursor:"pointer",minHeight:"auto"}}>
+              {pdfBusy?"PDF...":"Recapitulatif"}
+            </button>
+          )}
         </div>
-        {txs.length>0&&(
-          <button onClick={async()=>{
-            setPdfBusy(true);
-            try{await buildCaissePDF(txs,new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}));}
-            catch{showToast("Erreur PDF");}
-            setPdfBusy(false);
-          }} style={{background:`rgba(140,60,16,0.08)`,border:`1px solid ${G.copper}30`,color:G.copper,padding:"6px 14px",borderRadius:8,fontSize:10,fontWeight:600,cursor:"pointer",minHeight:"auto"}}>
-            {pdfBusy?"PDF…":"Récap fin de journée"}
-          </button>
+
+        {txs.length===0&&(
+          <div style={{padding:"24px 0",textAlign:"center",fontSize:14,color:G.light,fontStyle:"italic",fontFamily:"'Cormorant Garamond',serif"}}>
+            Aucune vente enregistree aujourd'hui
+          </div>
         )}
-      </div>
 
-      {txs.length===0&&(
-        <div style={{textAlign:"center",padding:"32px 0",fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:G.light,fontStyle:"italic"}}>
-          Aucune vente enregistrée aujourd'hui
-        </div>
-      )}
-
-      {txs.map(tx=>{
-        const pc=tx.payment==="CB"?"#1A3A6A":tx.payment==="AMEX"?"#1E5E32":G.copper;
-        return(
-          <Card key={tx.id} style={{padding:"12px 14px",marginBottom:8}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+        {txs.map((tx,i)=>{
+          const pc=tx.payment==="CB"?"#1A3060":tx.payment==="AMEX"?"#1A5028":G.copper;
+          return(
+            <div key={tx.id} style={{
+              display:"flex",alignItems:"flex-start",gap:12,
+              paddingBottom:10,marginBottom:10,
+              borderBottom:i<txs.length-1?`1px solid ${G.border}`:"none",
+            }}>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
-                  <span style={{fontSize:8,background:`${pc}15`,color:pc,padding:"2px 8px",borderRadius:10,fontWeight:600,whiteSpace:"nowrap"}}>{tx.payment}</span>
-                  <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:300,color:G.copper}}>{fmt(tx.total)}</span>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontSize:9,color:pc,fontWeight:600,letterSpacing:.5}}>{tx.payment}</span>
+                  <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,color:G.dark,fontWeight:300}}>{fmt(tx.total)}</span>
+                  {tx.change>0&&<span style={{fontSize:9,color:"#1E5E32",fontWeight:500}}>rendu {fmt(tx.change)}</span>}
                   <span style={{fontSize:9,color:G.light,marginLeft:"auto"}}>{tx.time}</span>
                 </div>
                 <div style={{fontSize:10,color:G.mid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                  {tx.items.map(i=>`${i.name}${i.qty>1?` ×${i.qty}`:""}`).join(" · ")}
+                  {tx.items.map(it=>`${it.name}${it.qty>1?` x${it.qty}`:""}`).join(" · ")}
                 </div>
               </div>
-              <button onClick={()=>deleteTx(tx.id)} style={{background:"none",border:`1px solid ${G.border}`,color:G.danger,padding:"4px 8px",borderRadius:6,fontSize:12,cursor:"pointer",minHeight:"auto",flexShrink:0}}>×</button>
+              <button onClick={()=>deleteTx(tx.id)} style={{background:"none",border:"none",color:G.light,padding:"2px 4px",fontSize:14,cursor:"pointer",minHeight:"auto",flexShrink:0,lineHeight:1}}>x</button>
             </div>
-          </Card>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
