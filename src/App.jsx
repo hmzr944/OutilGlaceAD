@@ -337,9 +337,20 @@ const parseOCRText = (raw) => {
     if(m){ const iso=toISO(m[1]); if(iso&&iso!==dlc) fabrique=iso; }
   }
 
-  /* ── Nom du parfum ─────────────────────────────────────── */
-  const nomM = full.match(/(?:carapine|sorbet|glace)\s+([A-ZÀ-Ÿa-zà-ÿ][A-ZÀ-Ÿa-zà-ÿ\s&]{3,40}?)(?:\s*[\-–—\d]|$)/i);
-  if(nomM) nom = nomM[1].trim();
+  /* ── Nom du parfum — matching sur les recettes connues ─── */
+  // 1. Cherche d'abord parmi les recettes connues (accent-normalisé)
+  const normFull = full.normalize("NFD").replace(/[̀-ͯ]/g,"");
+  for(const r of RECIPES){
+    const words = r.name.normalize("NFD").replace(/[̀-ͯ]/g,"").split(/\s+/).filter(w=>w.length>=3);
+    if(words.length===0) continue;
+    const hits = words.filter(w=>new RegExp(w.replace(/[^a-zA-Z0-9]/g,'.'),'i').test(normFull)).length;
+    if(hits >= Math.max(1, Math.ceil(words.length*0.5))){ nom=r.name; break; }
+  }
+  // 2. Fallback : préfixe "sorbet/glace/carapine" + nom
+  if(!nom){
+    const nomM = full.match(/(?:carapine|sorbet|glace)\s+([A-ZÀ-Ÿa-zà-ÿ][A-ZÀ-Ÿa-zà-ÿ\s&]{3,40}?)(?:\s*[\-–—\d]|$)/i);
+    if(nomM) nom = nomM[1].trim();
+  }
 
   /* ── Format carapine : 5L (pleine/GM) ou 2.5L (demi/PM) ── */
   let format = null;
@@ -1688,16 +1699,59 @@ AJUSTEMENTS — raisons`
               </Card>
             )}
 
-            {/* Zones stock */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+            {/* Zones stock — totaux par zone */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
               {zoneStats.map(z=>(
-                <Card key={z.id} style={{padding:"16px 10px",textAlign:"center"}}>
-                  <div style={{fontSize:7,letterSpacing:3,color:G.copper,textTransform:"uppercase",marginBottom:8,fontWeight:600}}>{z.label}</div>
-                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:300,color:G.dark,lineHeight:1}}>{z.eq}</div>
-                  <div style={{fontSize:8,color:G.light,marginTop:6}}>{z.demi}D · {z.pleine}P</div>
+                <Card key={z.id} style={{padding:"14px 8px",textAlign:"center"}}>
+                  <div style={{fontSize:7,letterSpacing:2.5,color:G.copper,textTransform:"uppercase",marginBottom:6,fontWeight:600}}>{z.label}</div>
+                  <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:300,color:G.dark,lineHeight:1}}>{z.eq}</div>
+                  <div style={{fontSize:8,color:G.light,marginTop:5}}>{z.demi}D · {z.pleine}P</div>
                 </Card>
               ))}
             </div>
+
+            {/* Stock par parfum — vue complète */}
+            <Card style={{padding:"16px 18px",marginBottom:14}}>
+              <div style={{fontSize:8,letterSpacing:3,color:G.copper,textTransform:"uppercase",fontWeight:700,marginBottom:14,
+                display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span>Stock par parfum</span>
+                <span style={{fontSize:8,color:G.light,letterSpacing:0,textTransform:"none",fontWeight:400}}>{RECIPES.filter(r=>totalZ(inventory[r.id])===0).length} épuisé{RECIPES.filter(r=>totalZ(inventory[r.id])===0).length>1?"s":""}</span>
+              </div>
+              {[...RECIPES].sort((a,b)=>totalZ(inventory[a.id])-totalZ(inventory[b.id])).map(r=>{
+                const total=totalZ(inventory[r.id]);
+                const res=zoneDemi(inventory[r.id],"reserve");
+                const taxi=zoneDemi(inventory[r.id],"taxi");
+                const bout=zoneDemi(inventory[r.id],"boutique");
+                const color=total===0?G.danger:total<=2?G.warn:total<=5?"#8C3C10":G.ok;
+                return(
+                  <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",
+                    borderBottom:`1px solid ${G.border}`}}>
+                    <div style={{width:4,height:4,borderRadius:"50%",background:color,flexShrink:0}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                        <span style={{fontSize:11,color:G.dark,fontWeight:total===0?700:500,
+                          textDecoration:total===0?"line-through":"none",opacity:total===0?.45:1,
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}}>{r.name}</span>
+                        <span style={{fontSize:11,fontWeight:700,color,flexShrink:0}}>{total===0?"Épuisé":total+" demi-eq"}</span>
+                      </div>
+                      {total>0&&(
+                        <div style={{height:2,background:"rgba(0,0,0,0.07)",borderRadius:1,overflow:"hidden",marginBottom:4}}>
+                          <div style={{height:"100%",background:color,borderRadius:1,
+                            width:`${Math.min(100,total/14*100)}%`,transition:"width .4s"}}/>
+                        </div>
+                      )}
+                      {total>0&&(
+                        <div style={{display:"flex",gap:8}}>
+                          {res>0&&<span style={{fontSize:8,color:G.light}}>Rés: {res}</span>}
+                          {taxi>0&&<span style={{fontSize:8,color:G.light}}>Taxi: {taxi}</span>}
+                          {bout>0&&<span style={{fontSize:8,color:G.copper}}>Pozz: {bout}</span>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
 
             <WeatherForecast/>
 
@@ -2949,14 +3003,28 @@ AJUSTEMENTS — raisons`
               <ScanModal
                 recipeName={RECIPES.find(r=>r.id===scanTarget.id)?.name||tracaNew.recipeId&&RECIPES.find(r=>r.id===tracaNew.recipeId)?.name}
                 onResult={parsed=>{
+                  // Auto-sélection du parfum si OCR l'a détecté
+                  let autoRecipe=null;
+                  if(parsed.nom){
+                    const nNom=parsed.nom.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+                    autoRecipe=RECIPES.find(r=>{
+                      const nR=r.name.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+                      const wR=nR.split(/\s+/).filter(w=>w.length>=3);
+                      return wR.some(w=>nNom.includes(w)||nNom.replace(/./g,c=>c+".?").slice(0,-2));
+                    });
+                  }
                   setTracaNew(p=>({
                     ...p,
                     lot:    parsed.lot||p.lot,
                     dlc:    parsed.dlc||p.dlc,
                     format: parsed.format||p.format,
+                    ...(autoRecipe?{recipeId:autoRecipe.id}:{}),
                   }));
                   setScanTarget(null);
-                  showToast("Lot, DLC" + (parsed.format ? ` et format (${parsed.format==="pleine"?"5L":"2.5L"})` : "") + " récupérés !");
+                  const parts=["Lot/DLC récupérés"];
+                  if(parsed.format) parts.push(`format ${parsed.format==="pleine"?"5L":"2.5L"}`);
+                  if(autoRecipe) parts.push(`parfum: ${autoRecipe.name}`);
+                  showToast(parts.join(" · "));
                 }}
                 onClose={()=>setScanTarget(null)}
               />
@@ -3438,8 +3506,14 @@ function FormatToggle({value, onChange, D}){
   const opts=[{v:"demi",label:"Demi-bac",sub:"2.5 L / PM"},{v:"pleine",label:"Pleine bac",sub:"5 L / GM"}];
   return(
     <div style={{marginBottom:16}}>
-      <div style={{fontSize:8,letterSpacing:2.5,color:D.muted,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>
-        Format {value?<span style={{color:D.ok,marginLeft:4}}>✓ détecté</span>:<span style={{color:D.danger,marginLeft:4}}>à choisir</span>}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+        <span style={{fontSize:8,letterSpacing:2.5,color:D.muted,textTransform:"uppercase",fontWeight:600}}>Format</span>
+        <span style={{fontSize:7,letterSpacing:1.5,textTransform:"uppercase",fontWeight:700,
+          color:value?D.ok:"rgba(217,64,64,0.75)",
+          border:`1px solid ${value?"rgba(61,173,106,0.35)":"rgba(217,64,64,0.25)"}`,
+          padding:"2px 7px",borderRadius:20}}>
+          {value?"Auto-détecté":"À choisir"}
+        </span>
       </div>
       <div style={{display:"flex",gap:8}}>
         {opts.map(o=>{
@@ -3502,12 +3576,17 @@ function ScanModal({recipeName, onResult, onClose}){
   const startCamera = async()=>{
     setCamLoading(true);
     try{
-      const constraints={video:{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{
         facingMode:{ideal:"environment"},
         width:{ideal:3840},height:{ideal:2160},
-        advanced:[{focusMode:"continuous"},{exposureMode:"continuous"},{whiteBalanceMode:"continuous"}],
-      }};
-      const stream=await navigator.mediaDevices.getUserMedia(constraints);
+      }});
+      // Autofocus/autoexposure en option (silencieux si non supporté)
+      try{
+        const [track]=stream.getVideoTracks();
+        await track?.applyConstraints?.({
+          advanced:[{focusMode:"continuous"},{exposureMode:"continuous"},{whiteBalanceMode:"continuous"}]
+        });
+      }catch{}
       streamRef.current=stream;
       const v=videoRef.current;
       v.srcObject=stream;
@@ -3668,7 +3747,8 @@ function ScanModal({recipeName, onResult, onClose}){
                 onMouseDown={e=>{e.currentTarget.style.transform="scale(0.91)";}}
                 onMouseUp={e=>{e.currentTarget.style.transform="";}}
                 onTouchStart={e=>{e.currentTarget.style.transform="scale(0.91)";}}
-                onTouchEnd={e=>{e.currentTarget.style.transform="";capture();}}>
+                onTouchEnd={e=>{e.currentTarget.style.transform="";}}>
+
                 <div style={{width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,0.92)"}}/>
               </button>
               <button onClick={()=>{stopCamera();setMode("manual");}}
