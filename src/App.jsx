@@ -341,7 +341,22 @@ const parseOCRText = (raw) => {
   const nomM = full.match(/(?:carapine|sorbet|glace)\s+([A-ZÀ-Ÿa-zà-ÿ][A-ZÀ-Ÿa-zà-ÿ\s&]{3,40}?)(?:\s*[\-–—\d]|$)/i);
   if(nomM) nom = nomM[1].trim();
 
-  return { lot, dlc, fabrique, nom };
+  /* ── Format carapine : 5L (pleine/GM) ou 2.5L (demi/PM) ── */
+  let format = null;
+  if(
+    /\b5[\s\-]*[lL1!]\b/.test(full) ||          // "5L", "5l", "5 L", "5 1" (OCR confusion)
+    /\b5[\s\-]*litres?\b/i.test(full) ||
+    /\bGM\b/.test(full) ||
+    /grande[\s\-]*mesure/i.test(full)
+  ) format = "pleine";
+  else if(
+    /\b2[,\.\s]5[\s\-]*[lL1!]\b/.test(full) ||  // "2.5L", "2,5L", "2 5L"
+    /\b2[,\.\s]5[\s\-]*litres?\b/i.test(full) ||
+    /\bPM\b/.test(full) ||
+    /petite[\s\-]*mesure/i.test(full)
+  ) format = "demi";
+
+  return { lot, dlc, fabrique, nom, format };
 };
 
 /** Worker Tesseract cached — créé une seule fois et réutilisé */
@@ -2936,11 +2951,12 @@ AJUSTEMENTS — raisons`
                 onResult={parsed=>{
                   setTracaNew(p=>({
                     ...p,
-                    lot: parsed.lot||p.lot,
-                    dlc: parsed.dlc||p.dlc,
+                    lot:    parsed.lot||p.lot,
+                    dlc:    parsed.dlc||p.dlc,
+                    format: parsed.format||p.format,
                   }));
                   setScanTarget(null);
-                  showToast("Lot et DLC récupérés !");
+                  showToast("Lot, DLC" + (parsed.format ? ` et format (${parsed.format==="pleine"?"5L":"2.5L"})` : "") + " récupérés !");
                 }}
                 onClose={()=>setScanTarget(null)}
               />
@@ -3417,6 +3433,35 @@ function ConfigCard({cfg, myAuthor, onRestore}){
    Dark immersif, viewfinder cuivré, résultat slide-up
 ═══════════════════════════ */
 
+/** Sélecteur format carapine : Demi 2.5L / Pleine 5L */
+function FormatToggle({value, onChange, D}){
+  const opts=[{v:"demi",label:"Demi-bac",sub:"2.5 L / PM"},{v:"pleine",label:"Pleine bac",sub:"5 L / GM"}];
+  return(
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:8,letterSpacing:2.5,color:D.muted,textTransform:"uppercase",fontWeight:600,marginBottom:8}}>
+        Format {value?<span style={{color:D.ok,marginLeft:4}}>✓ détecté</span>:<span style={{color:D.danger,marginLeft:4}}>à choisir</span>}
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        {opts.map(o=>{
+          const active=value===o.v;
+          return(
+            <button key={o.v} onClick={()=>onChange(o.v)}
+              style={{flex:1,padding:"11px 8px",
+                border:`1.5px solid ${active?D.copper:D.border}`,
+                background:active?"rgba(140,60,16,0.18)":"rgba(255,255,255,0.04)",
+                color:active?D.copper:D.muted,borderRadius:10,cursor:"pointer",
+                fontSize:10,fontWeight:active?700:400,minHeight:"auto",transition:"all .15s",
+                boxShadow:active?"0 0 0 1px rgba(140,60,16,0.25)":"none"}}>
+              <div style={{marginBottom:2}}>{o.label}</div>
+              <div style={{fontSize:9,opacity:.7}}>{o.sub}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** Prétraitement canvas : grayscale + boost contraste × 1.6 pour Tesseract */
 function preprocessForOCR(canvas){
   const ctx=canvas.getContext("2d");
@@ -3442,7 +3487,7 @@ function ScanModal({recipeName, onResult, onClose}){
   const [camLoading, setCamLoading]= useState(false);
   const [captured,   setCaptured]  = useState(null);
   const [ocrText,    setOcrText]   = useState("");
-  const [fields,     setFields]    = useState({lot:"", dlc:"", fabrique:"", nom:""});
+  const [fields,     setFields]    = useState({lot:"", dlc:"", fabrique:"", nom:"", format:""});
   const [errMsg,     setErrMsg]    = useState("");
 
   const stopCamera = useCallback(()=>{
@@ -3498,15 +3543,15 @@ function ScanModal({recipeName, onResult, onClose}){
       setErrMsg("OCR indisponible ("+err.message+") — remplissez les champs.");
     }
     setOcrText(ocrText_);
-    setFields({lot:ocrParsed.lot||"",dlc:ocrParsed.dlc||"",fabrique:ocrParsed.fabrique||"",nom:ocrParsed.nom||""});
+    setFields({lot:ocrParsed.lot||"",dlc:ocrParsed.dlc||"",fabrique:ocrParsed.fabrique||"",nom:ocrParsed.nom||"",format:ocrParsed.format||""});
     setMode("review");
   },[stopCamera]);
 
-  const confirm=()=>onResult({lot:fields.lot.trim()||null,dlc:fields.dlc||null,fabrique:fields.fabrique||null,nom:fields.nom.trim()||null,ref:null});
+  const confirm=()=>onResult({lot:fields.lot.trim()||null,dlc:fields.dlc||null,fabrique:fields.fabrique||null,nom:fields.nom.trim()||null,format:fields.format||null,ref:null});
 
   const reset=()=>{
     stopCamera();
-    setCaptured(null); setOcrText(""); setFields({lot:"",dlc:"",fabrique:"",nom:""});
+    setCaptured(null); setOcrText(""); setFields({lot:"",dlc:"",fabrique:"",nom:"",format:""});
     setProgress(0); setErrMsg(""); setMode("start");
   };
 
@@ -3682,6 +3727,7 @@ function ScanModal({recipeName, onResult, onClose}){
               <DField label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
               <DField label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
               <DField label="Parfum" value={fields.nom} onChange={v=>setFields(f=>({...f,nom:v}))} placeholder="Ex : Fraises Garriguettes"/>
+              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={D}/>
               {ocrText&&(
                 <details style={{marginBottom:14}}>
                   <summary style={{fontSize:8,color:"rgba(200,170,140,0.36)",cursor:"pointer",letterSpacing:1}}>Texte OCR brut</summary>
@@ -3744,9 +3790,10 @@ function ScanModal({recipeName, onResult, onClose}){
             <div style={{flex:1,overflowY:"auto",padding:"18px 20px 0"}}>
               <DField label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
               <DField label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
+              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={D}/>
             </div>
             <div style={{flexShrink:0,padding:"14px 20px 28px",borderTop:`1px solid ${D.border}`,display:"flex",flexDirection:"column",gap:8}}>
-              <button onClick={()=>onResult({lot:fields.lot||null,dlc:fields.dlc||null,fabrique:null,nom:null,ref:null})}
+              <button onClick={()=>onResult({lot:fields.lot||null,dlc:fields.dlc||null,fabrique:null,nom:null,format:fields.format||null,ref:null})}
                 disabled={!fields.lot&&!fields.dlc}
                 style={{width:"100%",
                   background:(!fields.lot&&!fields.dlc)?"rgba(140,60,16,0.16)":`linear-gradient(135deg,${D.copperL},${D.copper})`,
