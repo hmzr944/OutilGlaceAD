@@ -217,8 +217,45 @@ const histDelete = async (id) => {
 };
 
 /* ═══════════════════════════════════════════════════
+   SSE — Server-Sent Events (push temps réel)
+   Chaque écriture en base broadcast un événement à
+   tous les clients connectés → stock à jour instantané
+═══════════════════════════════════════════════════ */
+const sseClients = new Set();
+
+function ssebroadcast(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(msg); } catch { sseClients.delete(res); }
+  }
+}
+
+/* ═══════════════════════════════════════════════════
    API ROUTES PROTÉGÉES (requireAuth sur toutes)
 ═══════════════════════════════════════════════════ */
+
+// GET /api/events — flux SSE pour mises à jour temps réel
+app.get("/api/events", requireAuth, (req, res) => {
+  res.writeHead(200, {
+    "Content-Type":  "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection":    "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+  res.write("event: connected\ndata: {}\n\n");
+
+  sseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try { res.write("event: ping\ndata: {}\n\n"); } catch { /* client parti */ }
+  }, 25_000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
+});
 
 // GET /api/storage/:key
 app.get("/api/storage/:key", requireAuth, async (req, res) => {
@@ -239,6 +276,7 @@ app.get("/api/storage/list/:prefix", requireAuth, async (req, res) => {
 app.post("/api/storage/:key", requireAuth, async (req, res) => {
   try {
     await storeSet(req.params.key, req.body.value);
+    ssebroadcast("update", { key: req.params.key }); // push instantané à tous les clients
     res.json({ key: req.params.key, value: req.body.value });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -281,10 +319,10 @@ app.delete("/api/history/:id", requireAuth, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-/* ─── Rate limiting IA — 20 appels max / heure / IP ── */
+/* ─── Rate limiting IA — 60 appels max / heure / IP ── */
 const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 20,
+  max: 60,
   standardHeaders: true,
   legacyHeaders:   false,
   message: { error: "Trop de requêtes IA — réessayez dans une heure." },

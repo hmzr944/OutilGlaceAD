@@ -917,7 +917,7 @@ export default function App(){
   const [cmdMode,      setCmdMode]      = useState("manual");
   const [tracaRecords, setTracaRecords] = useState([]);
   const [tracaZone,    setTracaZone]    = useState("boutique");
-  const emptyTracaNew = ()=>({ recipeId:"", lot:"", dlc:"", miseEnPlace:todayISO(), retrait:addDays(todayISO(),14) });
+  const emptyTracaNew = ()=>({ recipeId:"", lot:"", dlc:"", miseEnPlace:todayISO(), retrait:addDays(todayISO(),14), format:"demi" });
   const [tracaNew,     setTracaNew]     = useState(emptyTracaNew);
   /* Contrôle température réception */
   const emptyTempForm = ()=>({ nom:"", format:"pleine", lot:"", temp:"" });
@@ -1165,14 +1165,14 @@ AJUSTEMENTS — raisons`
   const loadHistory=async()=>{setHistLoading(true);setHistEntries(await historyAPI.get());setHistLoading(false);};
   useEffect(()=>{if(tab==="historique")loadHistory();},[tab]);
 
-  /* ── Sync temps réel — polling toutes les 15s ── */
+  /* ── Sync temps réel — SSE + fallback polling 30s ── */
   const syncNow = useCallback(async()=>{
     try{
       const r=await fetch("/api/snapshot");
       if(!r.ok) return;
       const{inv,traca,temprec}=await r.json();
       // Ne pas écraser l'inventaire local si un edit a eu lieu dans les 2 dernières secondes
-      // (évite la race condition entre debounce 600ms et le sync 15s)
+      // (évite la race condition entre debounce 600ms et le push SSE)
       const invRecentlyEdited = Date.now()-lastInvEditRef.current < 2000;
       if(inv&&!invRecentlyEdited) setInventory(cur=>{try{const v=JSON.parse(inv);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
@@ -1187,8 +1187,18 @@ AJUSTEMENTS — raisons`
   useEffect(()=>{
     if(!loaded) return;
     syncNow(); // sync immédiat au chargement
-    const t=setInterval(syncNow,15_000);
-    return()=>clearInterval(t);
+
+    // SSE — push instantané depuis le serveur à chaque écriture
+    let es;
+    try{
+      es=new EventSource("/api/events");
+      es.addEventListener("update",()=>syncNow());
+      // en cas d'erreur, EventSource se reconnecte automatiquement
+    }catch{ es=null; }
+
+    // Fallback polling toutes les 30s (si SSE indisponible / réseau instable)
+    const t=setInterval(syncNow,30_000);
+    return()=>{ if(es) es.close(); clearInterval(t); };
   },[loaded,syncNow]);
 
   /* ── Données dérivées ── */
@@ -2911,9 +2921,9 @@ AJUSTEMENTS — raisons`
             <Card style={{padding:"20px",marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:G.dark,marginBottom:18}}>Nouvelle mise en place</div>
 
-              {/* Étape 1 — Zone */}
-              <StepRow num={1} title="Choisir la zone">
-                <div style={{display:"flex",gap:6}}>
+              {/* Étape 1 — Zone + Format carapine */}
+              <StepRow num={1} title="Zone de destination">
+                <div style={{display:"flex",gap:6,marginBottom:10}}>
                   {ZONES.map(z=>(
                     <button key={z.id} onClick={()=>setTracaZone(z.id)}
                       style={{flex:1,padding:"9px 6px",border:`1px solid ${tracaZone===z.id?G.copper:G.border}`,
@@ -2926,6 +2936,22 @@ AJUSTEMENTS — raisons`
                       <div style={{fontSize:7,opacity:.7,marginTop:1}}>{z.sub}</div>
                     </button>
                   ))}
+                </div>
+                {/* Format carapine */}
+                <div>
+                  <div style={{fontSize:8,letterSpacing:2,color:G.light,textTransform:"uppercase",fontWeight:500,marginBottom:6}}>Format carapine (déduit du stock Réserve)</div>
+                  <div style={{display:"flex",gap:6}}>
+                    {[{v:"demi",label:"Demi-bac",sub:"½ bac"},{v:"pleine",label:"Pleine bac",sub:"1 bac"}].map(f=>(
+                      <button key={f.v} onClick={()=>setTracaNew(p=>({...p,format:f.v}))}
+                        style={{flex:1,padding:"9px 8px",border:`1px solid ${tracaNew.format===f.v?G.copper:G.border}`,
+                          background:tracaNew.format===f.v?"rgba(140,60,16,0.10)":"rgba(255,251,246,0.5)",
+                          color:tracaNew.format===f.v?G.copper:G.mid,borderRadius:10,cursor:"pointer",
+                          fontSize:10,fontWeight:tracaNew.format===f.v?700:400,minHeight:"auto",transition:"all .15s"}}>
+                        <div>{f.label}</div>
+                        <div style={{fontSize:8,opacity:.6,marginTop:2}}>{f.sub}</div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </StepRow>
 
@@ -2997,10 +3023,12 @@ AJUSTEMENTS — raisons`
 
               <GBtn primary label="Ajouter au registre" disabled={!tracaNew.recipeId}
                 onClick={()=>{
+                  const fmt=tracaNew.format||"demi";
                   const rec={id:Date.now(),
                     recipeId:tracaNew.recipeId,
                     name:RECIPES.find(r=>r.id===tracaNew.recipeId)?.name||"",
                     zone:tracaZone,
+                    format:fmt,
                     lot:tracaNew.lot||null,
                     dlc:tracaNew.dlc||null,
                     miseEnPlace:tracaNew.miseEnPlace,
@@ -3008,9 +3036,31 @@ AJUSTEMENTS — raisons`
                     createdAt:new Date().toISOString(),
                     author:user?.name||"Équipe"};
                   saveTraca([rec,...tracaRecords]);
-                  historyAPI.push({type:"tracabilite",label:`Mise en place — ${rec.name}`,author:user?.name||"Équipe",data:{name:rec.name,zone:tracaZone,lot:rec.lot,dlc:rec.dlc,miseEnPlace:rec.miseEnPlace,retrait:rec.dlcJ14}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
+
+                  /* ── Déduction automatique du stock ── */
+                  let deductedFrom=null;
+                  setInventory(prev=>{
+                    const next=JSON.parse(JSON.stringify(prev));
+                    if(!next[tracaNew.recipeId]) next[tracaNew.recipeId]=emptyItem();
+                    // Déduit de Réserve en priorité, puis Taxi si épuisé
+                    for(const z of["reserve","taxi"]){
+                      if((next[tracaNew.recipeId][z]?.[fmt]||0)>0){
+                        next[tracaNew.recipeId][z][fmt]=Math.max(0,next[tracaNew.recipeId][z][fmt]-1);
+                        deductedFrom=z;
+                        break;
+                      }
+                    }
+                    if(deductedFrom){
+                      lastInvEditRef.current=Date.now();
+                      setTimeout(()=>storage.set("ad9_inv",JSON.stringify(next)).catch(()=>{}),50);
+                    }
+                    return deductedFrom?next:prev;
+                  });
+
+                  historyAPI.push({type:"tracabilite",label:`Mise en place — ${rec.name}`,author:user?.name||"Équipe",data:{name:rec.name,zone:tracaZone,format:fmt,lot:rec.lot,dlc:rec.dlc,miseEnPlace:rec.miseEnPlace,retrait:rec.dlcJ14}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
                   setTracaNew(emptyTracaNew());
-                  showToast("Mise en place enregistrée");
+                  const zoneSrc=deductedFrom?ZONES.find(z=>z.id===deductedFrom)?.label:"aucune source";
+                  showToast(deductedFrom?`Mise en place + 1 ${fmt}-bac déduit (${zoneSrc})`:"Mise en place enregistrée — stock Réserve/Taxi = 0");
                 }}/>
             </Card>
             {/* ── Registre organisé par jour puis par parfum ── */}
@@ -3348,6 +3398,7 @@ function ScanModal({recipeName, onResult, onClose}){
   const [camLoading, setCamLoading]= useState(false);
   const [captured,   setCaptured]  = useState(null);
   const [ocrText,    setOcrText]   = useState("");
+  const [ocrMethod,  setOcrMethod] = useState(""); // "claude" | "tesseract"
   const [fields,     setFields]    = useState({lot:"", dlc:"", fabrique:"", nom:""});
   const [errMsg,     setErrMsg]    = useState("");
 
@@ -3363,7 +3414,16 @@ function ScanModal({recipeName, onResult, onClose}){
   const startCamera = async()=>{
     setCamLoading(true);
     try{
-      const constraints={video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}};
+      // Contraintes maximales : résolution haute + autofocus continu pour meilleure lecture OCR
+      const constraints={video:{
+        facingMode:{ideal:"environment"},
+        width:{ideal:3840},height:{ideal:2160},
+        advanced:[
+          {focusMode:"continuous"},
+          {exposureMode:"continuous"},
+          {whiteBalanceMode:"continuous"},
+        ],
+      }};
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       const v = videoRef.current;
@@ -3385,17 +3445,37 @@ function ScanModal({recipeName, onResult, onClose}){
     }finally{ setCamLoading(false); }
   };
 
-  /* ── Capture + Tesseract OCR ── */
+  /* ── Capture → Claude Vision (primaire) → Tesseract (fallback) ── */
   const capture = useCallback(async()=>{
     const v=videoRef.current; const c=canvasRef.current;
     if(!v?.srcObject||v.videoWidth===0||v.readyState<2) return;
-    const scale=Math.min(1,1600/Math.max(v.videoWidth,v.videoHeight,1));
+    // Conserver la résolution maximale pour une meilleure lecture
+    const scale=Math.min(1,2400/Math.max(v.videoWidth,v.videoHeight,1));
     c.width=Math.round(v.videoWidth*scale);
     c.height=Math.round(v.videoHeight*scale);
     c.getContext("2d").drawImage(v,0,0,c.width,c.height);
-    const dataURL=c.toDataURL("image/jpeg",0.93);
+    const dataURL=c.toDataURL("image/jpeg",0.95);
     stopCamera(); setCaptured(dataURL); setMode("processing"); setProgress(0);
+
+    // === Tentative 1 : Claude Vision (rapide, précis) ===
     try{
+      setOcrMethod("claude");
+      const b64=dataURL.split(",")[1];
+      const parsed=await analyzeLabel(b64,"image/jpeg");
+      if(parsed.lot||parsed.dlc||parsed.nom){
+        setFields({lot:parsed.lot||"",dlc:parsed.dlc||"",fabrique:parsed.fabrique||"",nom:parsed.nom||""});
+        setMode("review");
+        return;
+      }
+      // Claude a répondu mais tout est null → forcer le fallback OCR
+      throw new Error("Aucun champ détecté par IA");
+    }catch(claudeErr){
+      // Erreur API (quota, réseau…) ou aucun résultat → Tesseract
+    }
+
+    // === Tentative 2 : Tesseract.js OCR (gratuit, local) ===
+    try{
+      setOcrMethod("tesseract");
       const {text,parsed}=await runTesseract(dataURL,p=>setProgress(p));
       setOcrText(text);
       setFields({lot:parsed.lot||"",dlc:parsed.dlc||"",fabrique:parsed.fabrique||"",nom:parsed.nom||""});
@@ -3407,7 +3487,7 @@ function ScanModal({recipeName, onResult, onClose}){
 
   const reset=()=>{
     stopCamera();
-    setCaptured(null); setOcrText(""); setFields({lot:"",dlc:"",fabrique:"",nom:""});
+    setCaptured(null); setOcrText(""); setOcrMethod(""); setFields({lot:"",dlc:"",fabrique:"",nom:""});
     setProgress(0); setErrMsg(""); setMode("start");
   };
 
@@ -3517,23 +3597,33 @@ function ScanModal({recipeName, onResult, onClose}){
           </div>
         )}
 
-        {/* ── Traitement OCR en cours ── */}
+        {/* ── Traitement en cours ── */}
         {mode==="processing"&&(
           <Glass>
             {captured&&<img src={captured} alt="" style={{width:"100%",maxHeight:160,objectFit:"contain",borderRadius:8,marginBottom:14,border:`1px solid ${G.border}`}}/>}
-            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,fontWeight:300,color:G.dark,marginBottom:12,textAlign:"center"}}>
-              Lecture en cours…
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,fontWeight:300,color:G.dark,marginBottom:4,textAlign:"center"}}>
+              {ocrMethod==="claude"?"Analyse IA en cours…":"Lecture OCR en cours…"}
             </div>
-            {/* Barre de progression */}
+            <div style={{fontSize:9,color:G.light,textAlign:"center",marginBottom:12,letterSpacing:1}}>
+              {ocrMethod==="claude"
+                ?"Claude Vision — extraction rapide et précise"
+                :"Tesseract.js — moteur OCR local"}
+            </div>
+            {/* Barre de progression (animée pour Claude, réelle pour Tesseract) */}
             <div style={{height:6,background:G.faint,borderRadius:6,overflow:"hidden",marginBottom:8}}>
-              <div style={{height:"100%",background:G.copper,borderRadius:6,transition:"width .3s",width:`${progress}%`}}/>
+              {ocrMethod==="claude"
+                ?<div style={{height:"100%",background:G.copper,borderRadius:6,animation:"shimmer 1.4s infinite linear",width:"60%"}}/>
+                :<div style={{height:"100%",background:G.copper,borderRadius:6,transition:"width .3s",width:`${progress}%`}}/>
+              }
             </div>
             <div style={{fontSize:10,color:G.light,textAlign:"center",lineHeight:1.7}}>
-              {progress<10
-                ?"Chargement du moteur OCR… (première utilisation : ~10 secondes)"
-                :progress<90
-                  ?`${progress}% — Analyse du texte en cours…`
-                  :"Finalisation…"
+              {ocrMethod==="claude"
+                ?"Envoi de l'image à l'IA…"
+                :progress<10
+                  ?"Chargement du moteur OCR… (première utilisation : ~10 secondes)"
+                  :progress<90
+                    ?`${progress}% — Analyse du texte en cours…`
+                    :"Finalisation…"
               }
             </div>
           </Glass>
@@ -3544,17 +3634,23 @@ function ScanModal({recipeName, onResult, onClose}){
           <Glass>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:G.ok}}/>
-              <span style={{fontSize:8,letterSpacing:3,color:G.ok,textTransform:"uppercase",fontWeight:600}}>Texte lu — vérifiez et corrigez si besoin</span>
+              <span style={{fontSize:8,letterSpacing:3,color:G.ok,textTransform:"uppercase",fontWeight:600}}>
+                {ocrMethod==="claude"?"IA — champs extraits":"OCR — vérifiez et corrigez si besoin"}
+              </span>
             </div>
-            <div style={{fontSize:9,color:G.light,marginBottom:16}}>Les champs ont été remplis automatiquement.</div>
+            <div style={{fontSize:9,color:G.light,marginBottom:16}}>
+              {ocrMethod==="claude"
+                ?"Extraction par Claude Vision — corrigez si nécessaire."
+                :"Champs remplis automatiquement par OCR."}
+            </div>
             {captured&&<img src={captured} alt="" style={{width:"100%",maxHeight:100,objectFit:"contain",borderRadius:6,marginBottom:14,border:`1px solid ${G.border}`}}/>}
 
             <F label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex: 6218161"/>
             <F label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
             <F label="Parfum" value={fields.nom} onChange={v=>setFields(f=>({...f,nom:v}))} placeholder="Ex: Fraises Garriguettes"/>
 
-            {/* Texte OCR brut (debug) */}
-            {ocrText&&(
+            {/* Texte OCR brut (debug — Tesseract uniquement) */}
+            {ocrText&&ocrMethod==="tesseract"&&(
               <details style={{marginTop:8}}>
                 <summary style={{fontSize:8,color:G.light,cursor:"pointer",letterSpacing:1}}>Texte OCR brut</summary>
                 <pre style={{fontSize:8,color:G.light,whiteSpace:"pre-wrap",marginTop:6,maxHeight:80,overflow:"auto",lineHeight:1.4}}>{ocrText}</pre>
