@@ -344,15 +344,44 @@ const parseOCRText = (raw) => {
   return { lot, dlc, fabrique, nom };
 };
 
+/** Worker Tesseract cached — créé une seule fois et réutilisé */
+let _tessWorker = null;
+let _tessLogger = null;
+
+const loadTessWorker = async () => {
+  if (_tessWorker) return _tessWorker;
+  const Tess = await loadTesseract();
+  // Chemins CDN explicites : évite que le worker cherche ses fichiers sur notre serveur
+  const p = await Tess.createWorker('fra', 1, {
+    workerPath:    'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
+    langPath:      'https://tessdata.projectnaptha.com/4.0.0',
+    corePath:      'https://cdn.jsdelivr.net/npm/tesseract.js-core@3.0.3/tesseract-core.wasm.js',
+    workerBlobURL: false,
+    logger: m => _tessLogger && _tessLogger(m),
+  });
+  _tessWorker = p;
+  return _tessWorker;
+};
+
 /** Lance la reconnaissance OCR sur une dataURL JPEG/PNG */
 const runTesseract = async (dataURL, onProgress) => {
-  const Tess = await loadTesseract();
-  const { data: { text } } = await Tess.recognize(
-    dataURL,
-    'fra+eng',
-    { logger: m => { if(m.status==='recognizing text' && onProgress) onProgress(Math.round(m.progress*100)); } }
-  );
-  return { text, parsed: parseOCRText(text) };
+  _tessLogger = m => {
+    if (!onProgress) return;
+    if      (m.status==='loading tesseract core')        onProgress(5  + Math.round(m.progress*20));
+    else if (m.status==='loading language traineddata')  onProgress(25 + Math.round(m.progress*20));
+    else if (m.status==='initializing tesseract')        onProgress(45 + Math.round(m.progress*5));
+    else if (m.status==='recognizing text')              onProgress(50 + Math.round(m.progress*50));
+  };
+  try {
+    const worker = await loadTessWorker();
+    const { data: { text } } = await worker.recognize(dataURL);
+    _tessLogger = null;
+    return { text, parsed: parseOCRText(text) };
+  } catch(e) {
+    _tessWorker = null; // reset pour réessayer la prochaine fois
+    _tessLogger = null;
+    throw e;
+  }
 };
 
 /* ═══════════════════════════
@@ -3459,12 +3488,18 @@ function ScanModal({recipeName, onResult, onClose}){
     preprocessForOCR(c); // grayscale + boost contraste
     const dataURL=c.toDataURL("image/jpeg",0.95);
     stopCamera(); setCaptured(dataURL); setMode("processing"); setProgress(0);
+    let ocrText_="", ocrParsed={};
     try{
-      const{text,parsed}=await runTesseract(dataURL,p=>setProgress(p));
-      setOcrText(text);
-      setFields({lot:parsed.lot||"",dlc:parsed.dlc||"",fabrique:parsed.fabrique||"",nom:parsed.nom||""});
-      setMode("review");
-    }catch(err){ setErrMsg("Erreur OCR : "+err.message); setMode("error"); }
+      const res=await runTesseract(dataURL,p=>setProgress(p));
+      ocrText_=res.text||"";
+      ocrParsed=res.parsed||{};
+    }catch(err){
+      // OCR a échoué → on reste en mode review avec champs vides pour saisie manuelle
+      setErrMsg("OCR indisponible ("+err.message+") — remplissez les champs.");
+    }
+    setOcrText(ocrText_);
+    setFields({lot:ocrParsed.lot||"",dlc:ocrParsed.dlc||"",fabrique:ocrParsed.fabrique||"",nom:ocrParsed.nom||""});
+    setMode("review");
   },[stopCamera]);
 
   const confirm=()=>onResult({lot:fields.lot.trim()||null,dlc:fields.dlc||null,fabrique:fields.fabrique||null,nom:fields.nom.trim()||null,ref:null});
@@ -3634,12 +3669,13 @@ function ScanModal({recipeName, onResult, onClose}){
                 style={{width:50,height:34,objectFit:"cover",borderRadius:6,border:`1px solid ${D.border}`,flexShrink:0}}/>}
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
-                  <div style={{width:7,height:7,borderRadius:"50%",background:(fields.lot||fields.dlc)?D.ok:"#555"}}/>
-                  <span style={{fontSize:8,letterSpacing:2.5,color:(fields.lot||fields.dlc)?D.ok:D.muted,textTransform:"uppercase",fontWeight:700}}>
-                    {(fields.lot||fields.dlc)?"Lu avec succès":"Aucun champ détecté"}
+                  <div style={{width:7,height:7,borderRadius:"50%",background:errMsg?D.danger:(fields.lot||fields.dlc)?D.ok:"#555"}}/>
+                  <span style={{fontSize:8,letterSpacing:2.5,textTransform:"uppercase",fontWeight:700,
+                    color:errMsg?D.danger:(fields.lot||fields.dlc)?D.ok:D.muted}}>
+                    {errMsg?"OCR indisponible":(fields.lot||fields.dlc)?"Lu avec succès":"Aucun champ détecté"}
                   </span>
                 </div>
-                <div style={{fontSize:9,color:D.muted}}>Vérifiez et corrigez si besoin</div>
+                <div style={{fontSize:9,color:D.muted}}>{errMsg?"Remplissez les champs manuellement":"Vérifiez et corrigez si besoin"}</div>
               </div>
             </div>
             <div style={{flex:1,overflowY:"auto",padding:"18px 20px 0"}}>
