@@ -243,15 +243,20 @@ Réponds UNIQUEMENT avec ce JSON exact (null si non visible) :
    Moteur OCR open-source, 100% navigateur, sans API, sans coût
 ═══════════════════════════ */
 
-/** Charge Tesseract.js depuis CDN une seule fois */
-const loadTesseract = () => new Promise((res, rej) => {
-  if (window.Tesseract) { res(window.Tesseract); return; }
-  const s = document.createElement('script');
-  s.src = 'https://unpkg.com/tesseract.js@4.1.1/dist/tesseract.min.js';
-  s.onload  = () => window.Tesseract ? res(window.Tesseract) : rej(new Error('Tesseract manquant'));
-  s.onerror = () => rej(new Error('Impossible de charger Tesseract.js'));
-  document.head.appendChild(s);
-});
+/** ─────────────────────────────────────────────────────────────────────────
+ *  MOTEUR 1 — TextDetector API (natif Chrome/Android, zéro délai, aucun DL)
+ *  Disponible : Chrome 79+, Android Chrome, Edge.  Absent : Firefox, Safari.
+ * ───────────────────────────────────────────────────────────────────────── */
+const tryTextDetector = async (imageSource) => {
+  if (!('TextDetector' in window)) return null;
+  try {
+    const det = new window.TextDetector();
+    const results = await det.detect(imageSource);
+    if (!results.length) return null;
+    const text = results.map(r => r.rawValue).join('\n');
+    return { text, parsed: parseOCRText(text) };
+  } catch { return null; }
+};
 
 /** Extrait lot / DLC / date fab d'un texte OCR brut — version robuste */
 const parseOCRText = (raw) => {
@@ -370,42 +375,59 @@ const parseOCRText = (raw) => {
   return { lot, dlc, fabrique, nom, format };
 };
 
-/** Worker Tesseract cached — créé une seule fois et réutilisé */
+/** ─────────────────────────────────────────────────────────────────────────
+ *  MOTEUR 2 — Tesseract.js v7 (npm installé)
+ *  Worker servi localement depuis /tesseract.worker.min.js (public/)
+ *  Langues : français, données chargées depuis tessdata CDN (cached).
+ *  Pre-warm au montage du ScanModal → capture immédiate sans attente.
+ * ───────────────────────────────────────────────────────────────────────── */
 let _tessWorker = null;
 let _tessLogger = null;
+let _tessWarmPromise = null;
 
-const loadTessWorker = async () => {
-  if (_tessWorker) return _tessWorker;
-  const Tess = await loadTesseract();
-  // Chemins CDN explicites : évite que le worker cherche ses fichiers sur notre serveur
-  const p = await Tess.createWorker('fra', 1, {
-    workerPath:    'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
-    langPath:      'https://tessdata.projectnaptha.com/4.0.0',
-    corePath:      'https://cdn.jsdelivr.net/npm/tesseract.js-core@3.0.3/tesseract-core.wasm.js',
-    workerBlobURL: false,
-    logger: m => _tessLogger && _tessLogger(m),
-  });
-  _tessWorker = p;
-  return _tessWorker;
+const warmTesseract = () => {
+  if (_tessWarmPromise) return _tessWarmPromise;
+  _tessWarmPromise = (async () => {
+    if (_tessWorker) return _tessWorker;
+    // Charge le bundle Tesseract depuis CDN v7 (même version que npm installé)
+    if (!window.Tesseract) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
+        s.onload = () => res(); s.onerror = () => rej(new Error('CDN Tesseract indisponible'));
+        document.head.appendChild(s);
+      });
+    }
+    const w = await window.Tesseract.createWorker('fra', 1, {
+      workerPath:    '/tesseract.worker.min.js',   // servi par notre propre serveur
+      langPath:      'https://tessdata.projectnaptha.com/4.0.0',
+      corePath:      'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js',
+      workerBlobURL: false,
+      logger: m => _tessLogger?.(m),
+    });
+    // Optimise pour les étiquettes : blocs de texte épars
+    await w.setParameters({ tessedit_pageseg_mode: '11' }); // SPARSE_TEXT
+    _tessWorker = w;
+    return w;
+  })().catch(e => { _tessWarmPromise=null; throw e; });
+  return _tessWarmPromise;
 };
 
-/** Lance la reconnaissance OCR sur une dataURL JPEG/PNG */
+/** Lance la reconnaissance Tesseract sur une dataURL JPEG/PNG */
 const runTesseract = async (dataURL, onProgress) => {
   _tessLogger = m => {
     if (!onProgress) return;
-    if      (m.status==='loading tesseract core')        onProgress(5  + Math.round(m.progress*20));
-    else if (m.status==='loading language traineddata')  onProgress(25 + Math.round(m.progress*20));
-    else if (m.status==='initializing tesseract')        onProgress(45 + Math.round(m.progress*5));
-    else if (m.status==='recognizing text')              onProgress(50 + Math.round(m.progress*50));
+    if      (m.status==='loading language traineddata') onProgress(5  + Math.round(m.progress*35));
+    else if (m.status==='initializing tesseract')       onProgress(40 + Math.round(m.progress*10));
+    else if (m.status==='recognizing text')             onProgress(50 + Math.round(m.progress*50));
   };
   try {
-    const worker = await loadTessWorker();
+    const worker = await warmTesseract();
     const { data: { text } } = await worker.recognize(dataURL);
     _tessLogger = null;
     return { text, parsed: parseOCRText(text) };
   } catch(e) {
-    _tessWorker = null; // reset pour réessayer la prochaine fois
-    _tessLogger = null;
+    _tessWorker = null; _tessWarmPromise = null; _tessLogger = null;
     throw e;
   }
 };
@@ -3563,14 +3585,59 @@ function ScanModal({recipeName, onResult, onClose}){
   const [ocrText,    setOcrText]   = useState("");
   const [fields,     setFields]    = useState({lot:"", dlc:"", fabrique:"", nom:"", format:""});
   const [errMsg,     setErrMsg]    = useState("");
+  const [liveHits,   setLiveHits]  = useState({});
+  const scanTimerRef = useRef(null);
+  const liveHitsRef  = useRef({});
 
   const stopCamera = useCallback(()=>{
     if(streamRef.current){ streamRef.current.getTracks().forEach(t=>t.stop()); streamRef.current=null; }
     const v=videoRef.current; if(v){ v.srcObject=null; }
   },[]);
 
+  /* Sync ref with state to avoid closure staleness in scan loop */
+  useEffect(()=>{ liveHitsRef.current = liveHits; },[liveHits]);
+
   /* Cleanup au démontage */
-  useEffect(()=>()=>stopCamera(),[]);
+  useEffect(()=>()=>{
+    stopCamera();
+    clearInterval(scanTimerRef.current);
+  },[]);
+
+  /* Pre-warm Tesseract dès l'ouverture du modal */
+  useEffect(()=>{ warmTesseract().catch(()=>{}); },[]);
+
+  /* ── Scan temps réel (mode camera) via TextDetector ── */
+  useEffect(()=>{
+    if(mode!=="camera") return;
+    const loop = async()=>{
+      const v=videoRef.current;
+      if(!v?.srcObject||v.videoWidth===0||v.readyState<2) return;
+      const res = await tryTextDetector(v);
+      if(!res?.parsed) return;
+      const p = res.parsed;
+      if(!p.lot&&!p.dlc&&!p.nom&&!p.format) return;
+      const merged={
+        ...liveHitsRef.current,
+        ...(p.lot    ?{lot:p.lot}    :{}),
+        ...(p.dlc    ?{dlc:p.dlc}    :{}),
+        ...(p.fabrique?{fabrique:p.fabrique}:{}),
+        ...(p.nom    ?{nom:p.nom}    :{}),
+        ...(p.format ?{format:p.format}:{}),
+      };
+      liveHitsRef.current=merged;
+      setLiveHits({...merged});
+      // Auto-capture quand lot ET DLC sont tous les deux détectés
+      if(merged.lot&&merged.dlc){
+        clearInterval(scanTimerRef.current);
+        scanTimerRef.current=null;
+        stopCamera();
+        setFields({lot:merged.lot||"",dlc:merged.dlc||"",fabrique:merged.fabrique||"",nom:merged.nom||"",format:merged.format||""});
+        setMode("review");
+      }
+    };
+    scanTimerRef.current=setInterval(loop,1500);
+    return()=>{ clearInterval(scanTimerRef.current); scanTimerRef.current=null; };
+  },[mode,stopCamera]);
 
   /* ── Démarrage caméra ── */
   const startCamera = async()=>{
@@ -3630,6 +3697,8 @@ function ScanModal({recipeName, onResult, onClose}){
 
   const reset=()=>{
     stopCamera();
+    clearInterval(scanTimerRef.current); scanTimerRef.current=null;
+    setLiveHits({}); liveHitsRef.current={};
     setCaptured(null); setOcrText(""); setFields({lot:"",dlc:"",fabrique:"",nom:"",format:""});
     setProgress(0); setErrMsg(""); setMode("start");
   };
@@ -3735,6 +3804,31 @@ function ScanModal({recipeName, onResult, onClose}){
                 </div>
               </div>
             </div>
+            {/* Overlay live détection */}
+            {(liveHits.lot||liveHits.dlc||liveHits.nom||liveHits.format)&&(
+              <div style={{position:"absolute",top:"auto",bottom:140,left:"50%",transform:"translateX(-50%)",
+                background:"rgba(8,4,2,0.88)",backdropFilter:"blur(12px)",
+                border:`1px solid ${D.copper}`,borderRadius:12,padding:"10px 16px",
+                minWidth:220,maxWidth:"85vw",zIndex:5,
+                boxShadow:"0 4px 20px rgba(0,0,0,0.6)"}}>
+                <div style={{fontSize:7,letterSpacing:3,color:D.copper,textTransform:"uppercase",fontWeight:700,marginBottom:8}}>
+                  Détecté en temps réel
+                </div>
+                {[["LOT",liveHits.lot],["DLC",liveHits.dlc?liveHits.dlc.split("T")[0]:null],
+                  ["PARFUM",liveHits.nom],["FORMAT",liveHits.format]].map(([label,val])=>val?(
+                  <div key={label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:D.ok,flexShrink:0}}/>
+                    <span style={{fontSize:8,color:D.muted,letterSpacing:1.5,minWidth:42}}>{label}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:D.text,letterSpacing:.3}}>{val}</span>
+                  </div>
+                ):null)}
+                {liveHits.lot&&liveHits.dlc&&(
+                  <div style={{marginTop:8,fontSize:8,color:D.ok,letterSpacing:1.5,textAlign:"center"}}>
+                    ✓ Capture automatique…
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{flexShrink:0,paddingBottom:36,paddingTop:16,
               background:"linear-gradient(to top,rgba(8,4,2,0.92) 55%,transparent)",
               display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
