@@ -389,24 +389,30 @@ const warmTesseract = () => {
   if (_tessWarmPromise) return _tessWarmPromise;
   _tessWarmPromise = (async () => {
     if (_tessWorker) return _tessWorker;
-    // Charge le bundle Tesseract depuis CDN v7 (même version que npm installé)
+    // Charge le bundle depuis notre propre serveur (public/) — zéro dépendance CDN mobile
     if (!window.Tesseract) {
       await new Promise((res, rej) => {
         const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
-        s.onload = () => res(); s.onerror = () => rej(new Error('CDN Tesseract indisponible'));
+        s.src = '/tesseract.min.js';
+        s.onload = res;
+        s.onerror = () => {
+          // Fallback CDN si build non déployé (dev sans public/)
+          const s2 = document.createElement('script');
+          s2.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
+          s2.onload = res; s2.onerror = () => rej(new Error('Tesseract introuvable'));
+          document.head.appendChild(s2);
+        };
         document.head.appendChild(s);
       });
     }
     const w = await window.Tesseract.createWorker('fra', 1, {
-      workerPath:    '/tesseract.worker.min.js',   // servi par notre propre serveur
-      langPath:      'https://tessdata.projectnaptha.com/4.0.0',
+      workerPath:    '/tesseract.worker.min.js',
+      langPath:      'https://tessdata.projectnaptha.com/4.0.0_fast',
       corePath:      'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0/tesseract-core-simd-lstm.wasm.js',
       workerBlobURL: false,
       logger: m => _tessLogger?.(m),
     });
-    // Optimise pour les étiquettes : blocs de texte épars
-    await w.setParameters({ tessedit_pageseg_mode: '11' }); // SPARSE_TEXT
+    await w.setParameters({ tessedit_pageseg_mode: '11' });
     _tessWorker = w;
     return w;
   })().catch(e => { _tessWarmPromise=null; throw e; });
@@ -3558,16 +3564,39 @@ function FormatToggle({value, onChange, D}){
   );
 }
 
-/** Prétraitement canvas : grayscale + boost contraste × 1.6 pour Tesseract */
+/** Prétraitement canvas : grayscale + seuillage adaptatif via table des sommes intégrales.
+ *  O(w×h) — rapide sur mobile. Bien meilleur qu'un boost de contraste pour étiquettes. */
 function preprocessForOCR(canvas){
   const ctx=canvas.getContext("2d");
-  const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const {width:W,height:H}=canvas;
+  const img=ctx.getImageData(0,0,W,H);
   const d=img.data;
-  const k=1.6, b=128*(1-k);
-  for(let i=0;i<d.length;i+=4){
-    const g=Math.round(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]);
-    const v=Math.min(255,Math.max(0,g*k+b));
-    d[i]=d[i+1]=d[i+2]=v;
+  const R=20; // demi-fenêtre (px)
+  // 1. Niveaux de gris
+  const gray=new Float32Array(W*H);
+  for(let i=0;i<gray.length;i++){
+    const o=i*4;
+    gray[i]=0.299*d[o]+0.587*d[o+1]+0.114*d[o+2];
+  }
+  // 2. Table des sommes intégrales
+  const sat=new Float64Array(W*H);
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      const i=y*W+x;
+      sat[i]=gray[i]+(x>0?sat[i-1]:0)+(y>0?sat[i-W]:0)-(x>0&&y>0?sat[i-W-1]:0);
+    }
+  }
+  // 3. Seuillage : pixel < moyenne locale − 8 → noir, sinon blanc
+  for(let y=0;y<H;y++){
+    const y1=Math.max(0,y-R), y2=Math.min(H-1,y+R);
+    for(let x=0;x<W;x++){
+      const x1=Math.max(0,x-R), x2=Math.min(W-1,x+R);
+      const cnt=(y2-y1+1)*(x2-x1+1);
+      const sum=sat[y2*W+x2]-(x1>0?sat[y2*W+x1-1]:0)-(y1>0?sat[(y1-1)*W+x2]:0)+(x1>0&&y1>0?sat[(y1-1)*W+x1-1]:0);
+      const v=gray[y*W+x]<(sum/cnt)-8?0:255;
+      const o=(y*W+x)*4;
+      d[o]=d[o+1]=d[o+2]=v; d[o+3]=255;
+    }
   }
   ctx.putImageData(img,0,0);
 }
@@ -3672,7 +3701,7 @@ function ScanModal({recipeName, onResult, onClose}){
   const capture = useCallback(async()=>{
     const v=videoRef.current; const c=canvasRef.current;
     if(!v?.srcObject||v.videoWidth===0||v.readyState<2) return;
-    const scale=Math.min(1,2000/Math.max(v.videoWidth,v.videoHeight,1));
+    const scale=Math.min(1,900/Math.max(v.videoWidth,v.videoHeight,1));
     c.width=Math.round(v.videoWidth*scale);
     c.height=Math.round(v.videoHeight*scale);
     c.getContext("2d").drawImage(v,0,0,c.width,c.height);
@@ -3703,288 +3732,278 @@ function ScanModal({recipeName, onResult, onClose}){
     setProgress(0); setErrMsg(""); setMode("start");
   };
 
-  // Design tokens dark — scan immersif
-  const D={
-    bg:"rgba(8,4,2,0.97)",card:"rgba(18,10,4,0.96)",
-    border:"rgba(140,60,16,0.28)",borderActive:"rgba(140,60,16,0.65)",
-    copper:G.copper,copperL:G.copperL,
-    text:"rgba(250,244,236,0.92)",muted:"rgba(200,170,140,0.52)",
-    ok:"#3DAD6A",danger:"#D94040",
+  /* ── Design tokens ── */
+  const C={
+    bg:"#111",surface:"#1c1c1c",surfaceHi:"#262626",
+    border:"#2d2d2d",borderHi:"#444",
+    accent:"#f0a040",text:"#f0f0f0",muted:"#777",
+    ok:"#4ec87e",danger:"#e05252",
+    font:"system-ui,-apple-system,sans-serif",
   };
-  const DField=({label,value,onChange,type="text",placeholder=""})=>(
-    <div style={{marginBottom:14}}>
-      <div style={{fontSize:8,letterSpacing:2.5,color:D.muted,textTransform:"uppercase",fontWeight:600,marginBottom:6}}>{label}</div>
-      <input type={type} value={value} onChange={e=>onChange&&onChange(e.target.value)} placeholder={placeholder}
-        style={{width:"100%",padding:"13px 14px",border:`1px solid ${value?D.borderActive:D.border}`,borderRadius:10,
-          fontSize:15,fontWeight:value?600:400,background:value?"rgba(255,255,255,0.09)":"rgba(255,255,255,0.05)",
-          color:D.text,letterSpacing:.3,minHeight:"auto",transition:"all .18s",outline:"none"}}/>
+  const btn=(accent,disabled)=>({
+    width:"100%",border:"none",borderRadius:12,padding:"15px 20px",
+    fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",
+    background:disabled?"#282828":accent,
+    color:disabled?"#555":"#fff",minHeight:"auto",transition:"opacity .15s",
+    opacity:disabled?.6:1,
+  });
+  const btnOutline={
+    width:"100%",border:`1px solid ${C.border}`,borderRadius:12,padding:"13px 20px",
+    fontSize:13,fontWeight:500,cursor:"pointer",background:"transparent",
+    color:C.muted,minHeight:"auto",
+  };
+  const inputStyle=(filled)=>({
+    width:"100%",padding:"14px 16px",border:`1px solid ${filled?C.borderHi:C.border}`,
+    borderRadius:10,fontSize:15,fontWeight:filled?600:400,
+    background:filled?"rgba(255,255,255,0.07)":"rgba(255,255,255,0.03)",
+    color:C.text,minHeight:"auto",outline:"none",transition:"border-color .15s",
+    fontFamily:C.font,
+  });
+  const Field=({label,value,onChange,type="text",placeholder=""})=>(
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:600,color:C.muted,marginBottom:6,letterSpacing:.3}}>{label}</div>
+      <input type={type} value={value} onChange={e=>onChange&&onChange(e.target.value)}
+        placeholder={placeholder} style={inputStyle(!!value)}/>
     </div>
   );
 
   return(
-    <div style={{position:"fixed",inset:0,background:D.bg,zIndex:200,display:"flex",flexDirection:"column"}}>
-      {/* canvas + video TOUJOURS dans le DOM */}
+    <div style={{position:"fixed",inset:0,background:C.bg,zIndex:200,display:"flex",flexDirection:"column",fontFamily:C.font}}>
       <canvas ref={canvasRef} style={{display:"none"}}/>
       <video ref={videoRef} playsInline muted
         style={{display:mode==="camera"?"block":"none",position:"absolute",top:0,left:0,
           width:"100%",height:"100%",objectFit:"cover",zIndex:0}}/>
 
       {/* Header */}
-      <div style={{position:"relative",zIndex:10,flexShrink:0,
-        background:mode==="camera"?"rgba(8,4,2,0.72)":D.card,backdropFilter:"blur(20px)",
-        borderBottom:`1px solid ${mode==="camera"?"rgba(140,60,16,0.18)":D.border}`,
-        padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div>
-          <div style={{fontSize:7,letterSpacing:4,color:D.copper,textTransform:"uppercase",marginBottom:3,fontWeight:700}}>OCR · Lecture étiquette</div>
-          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,color:D.text,letterSpacing:.2}}>{recipeName||"Carapine"}</div>
+      {mode!=="camera"&&(
+        <div style={{flexShrink:0,padding:"16px 20px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:3}}>Scanner étiquette</div>
+            <div style={{fontSize:17,fontWeight:600,color:C.text}}>{recipeName||"Carapine"}</div>
+          </div>
+          <button onClick={()=>{stopCamera();onClose();}}
+            style={{background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.muted,
+              padding:"8px 16px",borderRadius:8,cursor:"pointer",fontSize:13,minHeight:"auto"}}>
+            Fermer
+          </button>
         </div>
-        <button onClick={()=>{stopCamera();onClose();}}
-          style={{background:"rgba(255,255,255,0.07)",border:`1px solid ${D.border}`,color:D.muted,
-            padding:"7px 16px",borderRadius:10,cursor:"pointer",fontSize:9,letterSpacing:2,minHeight:"auto",fontWeight:500}}>
-          Fermer
-        </button>
-      </div>
+      )}
 
-      {/* Contenu */}
       <div style={{flex:1,position:"relative",overflow:"hidden"}}>
 
-        {/* START */}
+        {/* ── START ── */}
         {mode==="start"&&(
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-            height:"100%",padding:"32px 24px",gap:22,animation:"fadein .3s ease"}}>
-            <div style={{width:76,height:52,border:"2px solid rgba(140,60,16,0.40)",borderRadius:8,position:"relative",flexShrink:0}}>
-              {[{top:-2,left:-2,borderTop:`2.5px solid ${D.copper}`,borderLeft:`2.5px solid ${D.copper}`},
-                {top:-2,right:-2,borderTop:`2.5px solid ${D.copper}`,borderRight:`2.5px solid ${D.copper}`},
-                {bottom:-2,left:-2,borderBottom:`2.5px solid ${D.copper}`,borderLeft:`2.5px solid ${D.copper}`},
-                {bottom:-2,right:-2,borderBottom:`2.5px solid ${D.copper}`,borderRight:`2.5px solid ${D.copper}`},
-              ].map((s,i)=><div key={i} style={{position:"absolute",width:16,height:16,borderRadius:2,...s}}/>)}
-              <div style={{position:"absolute",top:"35%",left:4,right:4,height:2,
-                background:`linear-gradient(90deg,transparent,${D.copper},transparent)`,
-                animation:"scanbeam 2.2s ease-in-out infinite"}}/>
+            height:"100%",padding:"32px 24px",gap:24}}>
+            <div style={{width:72,height:72,borderRadius:"50%",background:C.surfaceHi,
+              border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+              </svg>
             </div>
             <div style={{textAlign:"center"}}>
-              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:300,color:D.text,marginBottom:8}}>Lire l'étiquette carapine</div>
-              <div style={{fontSize:11,color:D.muted,lineHeight:1.8,maxWidth:280}}>Pointez la caméra sur l'étiquette — le lot et la DLC sont extraits automatiquement.</div>
-            </div>
-            <button onClick={startCamera} disabled={camLoading}
-              style={{width:"100%",maxWidth:300,
-                background:camLoading?"rgba(140,60,16,0.22)":`linear-gradient(135deg,${D.copperL},${D.copper})`,
-                border:"none",color:"#fff",borderRadius:14,padding:"17px",
-                fontSize:11,fontWeight:700,cursor:camLoading?"wait":"pointer",
-                letterSpacing:2.5,textTransform:"uppercase",minHeight:"auto",
-                boxShadow:camLoading?"none":"0 8px 28px rgba(140,60,16,0.45)",transition:"all .22s"}}>
-              {camLoading?"Démarrage…":"Activer la caméra"}
-            </button>
-            <button onClick={()=>setMode("manual")}
-              style={{background:"none",border:"none",color:D.muted,fontSize:9,letterSpacing:2,
-                textTransform:"uppercase",cursor:"pointer",textDecoration:"underline",minHeight:"auto",padding:"4px 0"}}>
-              Saisie manuelle
-            </button>
-          </div>
-        )}
-
-        {/* CAMERA */}
-        {mode==="camera"&&(
-          <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",zIndex:1}}>
-            <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
-              <div style={{width:"80%",maxWidth:300,aspectRatio:"5/3",position:"relative"}}>
-                <div style={{position:"fixed",inset:0,zIndex:-1,boxShadow:"inset 0 0 0 2000px rgba(0,0,0,0.55)",pointerEvents:"none"}}/>
-                <div style={{position:"absolute",inset:0,border:"1.5px solid rgba(140,60,16,0.38)",borderRadius:8}}/>
-                {[{top:-2,left:-2,borderTop:`3px solid ${D.copper}`,borderLeft:`3px solid ${D.copper}`},
-                  {top:-2,right:-2,borderTop:`3px solid ${D.copper}`,borderRight:`3px solid ${D.copper}`},
-                  {bottom:-2,left:-2,borderBottom:`3px solid ${D.copper}`,borderLeft:`3px solid ${D.copper}`},
-                  {bottom:-2,right:-2,borderBottom:`3px solid ${D.copper}`,borderRight:`3px solid ${D.copper}`},
-                ].map((s,i)=><div key={i} style={{position:"absolute",width:18,height:18,borderRadius:2,...s}}/>)}
-                <div style={{position:"absolute",left:4,right:4,height:2,
-                  background:`linear-gradient(90deg,transparent,${D.copper},transparent)`,
-                  animation:"scanbeam 2.4s ease-in-out infinite",top:0}}/>
-                <div style={{position:"absolute",bottom:-34,left:"50%",transform:"translateX(-50%)",
-                  whiteSpace:"nowrap",background:"rgba(0,0,0,0.68)",borderRadius:20,padding:"5px 14px"}}>
-                  <span style={{fontSize:10,color:"rgba(250,244,236,0.80)",letterSpacing:.5}}>Alignez le texte dans le cadre</span>
-                </div>
+              <div style={{fontSize:20,fontWeight:600,color:C.text,marginBottom:8}}>Scanner l'étiquette</div>
+              <div style={{fontSize:13,color:C.muted,lineHeight:1.7,maxWidth:260}}>
+                Pointez la caméra sur l'étiquette.<br/>Le lot et la DLC sont lus automatiquement.
               </div>
             </div>
-            {/* Overlay live détection */}
-            {(liveHits.lot||liveHits.dlc||liveHits.nom||liveHits.format)&&(
-              <div style={{position:"absolute",top:"auto",bottom:140,left:"50%",transform:"translateX(-50%)",
-                background:"rgba(8,4,2,0.88)",backdropFilter:"blur(12px)",
-                border:`1px solid ${D.copper}`,borderRadius:12,padding:"10px 16px",
-                minWidth:220,maxWidth:"85vw",zIndex:5,
-                boxShadow:"0 4px 20px rgba(0,0,0,0.6)"}}>
-                <div style={{fontSize:7,letterSpacing:3,color:D.copper,textTransform:"uppercase",fontWeight:700,marginBottom:8}}>
-                  Détecté en temps réel
-                </div>
-                {[["LOT",liveHits.lot],["DLC",liveHits.dlc?liveHits.dlc.split("T")[0]:null],
-                  ["PARFUM",liveHits.nom],["FORMAT",liveHits.format]].map(([label,val])=>val?(
-                  <div key={label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                    <div style={{width:6,height:6,borderRadius:"50%",background:D.ok,flexShrink:0}}/>
-                    <span style={{fontSize:8,color:D.muted,letterSpacing:1.5,minWidth:42}}>{label}</span>
-                    <span style={{fontSize:11,fontWeight:700,color:D.text,letterSpacing:.3}}>{val}</span>
-                  </div>
-                ):null)}
-                {liveHits.lot&&liveHits.dlc&&(
-                  <div style={{marginTop:8,fontSize:8,color:D.ok,letterSpacing:1.5,textAlign:"center"}}>
-                    ✓ Capture automatique…
-                  </div>
-                )}
-              </div>
-            )}
-            <div style={{flexShrink:0,paddingBottom:36,paddingTop:16,
-              background:"linear-gradient(to top,rgba(8,4,2,0.92) 55%,transparent)",
-              display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
-              <button onClick={capture}
-                style={{width:70,height:70,borderRadius:"50%",background:D.copper,
-                  border:"4px solid rgba(255,255,255,0.20)",
-                  boxShadow:`0 0 0 2px rgba(140,60,16,0.45), 0 8px 28px rgba(140,60,16,0.55)`,
-                  cursor:"pointer",minHeight:"auto",transition:"transform .12s",
-                  display:"flex",alignItems:"center",justifyContent:"center"}}
-                onMouseDown={e=>{e.currentTarget.style.transform="scale(0.91)";}}
-                onMouseUp={e=>{e.currentTarget.style.transform="";}}
-                onTouchStart={e=>{e.currentTarget.style.transform="scale(0.91)";}}
-                onTouchEnd={e=>{e.currentTarget.style.transform="";}}>
-
-                <div style={{width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,0.92)"}}/>
+            <div style={{width:"100%",maxWidth:320,display:"flex",flexDirection:"column",gap:10}}>
+              <button onClick={startCamera} disabled={camLoading} style={btn(C.accent,camLoading)}>
+                {camLoading?"Démarrage…":"Activer la caméra"}
               </button>
-              <button onClick={()=>{stopCamera();setMode("manual");}}
-                style={{background:"none",border:"none",color:"rgba(200,170,140,0.52)",
-                  fontSize:9,letterSpacing:2,textTransform:"uppercase",
-                  cursor:"pointer",textDecoration:"underline",minHeight:"auto",padding:"4px 0"}}>
+              <button onClick={()=>setMode("manual")} style={btnOutline}>
                 Saisie manuelle
               </button>
             </div>
           </div>
         )}
 
-        {/* PROCESSING */}
+        {/* ── CAMERA ── */}
+        {mode==="camera"&&(
+          <div style={{position:"absolute",inset:0,zIndex:1,display:"flex",flexDirection:"column"}}>
+            {/* Overlay sombre + cadre guide */}
+            <div style={{flex:1,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.45)",pointerEvents:"none"}}/>
+              <div style={{position:"relative",width:"78%",maxWidth:280,aspectRatio:"4/3",
+                border:"2px solid rgba(255,255,255,0.75)",borderRadius:12,zIndex:2}}>
+                {/* Coins d'angle */}
+                {[[{top:-2,left:-2},{borderTop:"2.5px solid #fff",borderLeft:"2.5px solid #fff"}],
+                  [{top:-2,right:-2},{borderTop:"2.5px solid #fff",borderRight:"2.5px solid #fff"}],
+                  [{bottom:-2,left:-2},{borderBottom:"2.5px solid #fff",borderLeft:"2.5px solid #fff"}],
+                  [{bottom:-2,right:-2},{borderBottom:"2.5px solid #fff",borderRight:"2.5px solid #fff"}],
+                ].map(([pos,style],i)=>(
+                  <div key={i} style={{position:"absolute",width:18,height:18,borderRadius:2,...pos,...style}}/>
+                ))}
+                <div style={{position:"absolute",inset:0,background:"transparent",borderRadius:10}}/>
+              </div>
+              <div style={{position:"absolute",bottom:16,left:"50%",transform:"translateX(-50%)",
+                background:"rgba(0,0,0,0.6)",backdropFilter:"blur(8px)",borderRadius:20,padding:"5px 14px"}}>
+                <span style={{fontSize:12,color:"rgba(255,255,255,0.80)"}}>Alignez le texte dans le cadre</span>
+              </div>
+            </div>
+
+            {/* Panneau bas */}
+            <div style={{flexShrink:0,background:"rgba(0,0,0,0.80)",backdropFilter:"blur(16px)",
+              borderTop:"1px solid rgba(255,255,255,0.08)",padding:"16px 20px 36px",
+              display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
+
+              {/* Chips de détection live */}
+              {(liveHits.lot||liveHits.dlc||liveHits.nom||liveHits.format)&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginBottom:4}}>
+                  {[["LOT",liveHits.lot],["DLC",liveHits.dlc?liveHits.dlc.split("T")[0]:null],
+                    ["PARFUM",liveHits.nom],["FORMAT",liveHits.format]].map(([k,v])=>v?(
+                    <div key={k} style={{display:"flex",alignItems:"center",gap:5,
+                      background:"rgba(78,200,126,0.12)",border:"1px solid rgba(78,200,126,0.30)",
+                      borderRadius:20,padding:"4px 10px"}}>
+                      <span style={{fontSize:11,color:C.ok,fontWeight:700}}>✓</span>
+                      <span style={{fontSize:11,color:"rgba(255,255,255,0.55)",marginRight:2}}>{k}</span>
+                      <span style={{fontSize:12,color:C.text,fontWeight:600}}>{v}</span>
+                    </div>
+                  ):null)}
+                  {liveHits.lot&&liveHits.dlc&&(
+                    <div style={{width:"100%",textAlign:"center",fontSize:11,color:C.ok,marginTop:2}}>
+                      Capture automatique en cours…
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Bouton capture */}
+              <button onClick={capture}
+                style={{width:68,height:68,borderRadius:"50%",
+                  background:C.accent,border:"4px solid rgba(255,255,255,0.18)",
+                  boxShadow:"0 0 0 2px rgba(240,160,64,0.35), 0 6px 24px rgba(240,160,64,0.40)",
+                  cursor:"pointer",minHeight:"auto",transition:"transform .12s",
+                  display:"flex",alignItems:"center",justifyContent:"center"}}
+                onMouseDown={e=>e.currentTarget.style.transform="scale(0.92)"}
+                onMouseUp={e=>e.currentTarget.style.transform=""}
+                onTouchStart={e=>e.currentTarget.style.transform="scale(0.92)"}
+                onTouchEnd={e=>e.currentTarget.style.transform=""}>
+                <div style={{width:24,height:24,borderRadius:"50%",background:"rgba(255,255,255,0.95)"}}/>
+              </button>
+
+              <button onClick={()=>{stopCamera();setMode("manual");}}
+                style={{background:"none",border:"none",color:C.muted,
+                  fontSize:12,cursor:"pointer",minHeight:"auto",padding:"2px 0"}}>
+                Saisie manuelle
+              </button>
+            </div>
+
+            {/* Bouton fermer en haut à droite */}
+            <button onClick={()=>{stopCamera();onClose();}}
+              style={{position:"absolute",top:14,right:14,zIndex:10,
+                background:"rgba(0,0,0,0.55)",backdropFilter:"blur(8px)",
+                border:"1px solid rgba(255,255,255,0.15)",color:"rgba(255,255,255,0.75)",
+                borderRadius:20,padding:"6px 14px",fontSize:13,cursor:"pointer",minHeight:"auto"}}>
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* ── PROCESSING ── */}
         {mode==="processing"&&(
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-            height:"100%",padding:"24px",animation:"fadein .2s ease"}}>
+            height:"100%",padding:"24px",gap:16}}>
             {captured&&(
-              <div style={{width:"100%",maxWidth:300,borderRadius:12,overflow:"hidden",
-                border:`1px solid ${D.border}`,marginBottom:24,boxShadow:"0 4px 24px rgba(0,0,0,0.45)"}}>
-                <img src={captured} alt="" style={{width:"100%",maxHeight:130,objectFit:"contain",display:"block"}}/>
+              <div style={{width:"100%",maxWidth:280,borderRadius:12,overflow:"hidden",
+                border:`1px solid ${C.border}`,boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+                <img src={captured} alt="" style={{width:"100%",maxHeight:120,objectFit:"contain",display:"block"}}/>
               </div>
             )}
-            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:300,color:D.text,marginBottom:4,textAlign:"center"}}>Lecture en cours…</div>
-            <div style={{fontSize:9,color:D.muted,letterSpacing:2,textTransform:"uppercase",marginBottom:20,textAlign:"center"}}>OCR local — sans réseau</div>
-            <div style={{width:"100%",maxWidth:300,height:3,background:"rgba(140,60,16,0.14)",borderRadius:4,overflow:"hidden",marginBottom:10}}>
-              <div style={{height:"100%",borderRadius:4,
-                background:`linear-gradient(90deg,${D.copper},${D.copperL})`,
-                transition:"width .35s ease",width:`${Math.max(3,progress)}%`,
-                boxShadow:"0 0 6px rgba(140,60,16,0.55)"}}/>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:18,fontWeight:600,color:C.text,marginBottom:4}}>Analyse en cours…</div>
+              <div style={{fontSize:12,color:C.muted}}>
+                {progress<8?"Chargement OCR — 1ère utilisation ~15s":`${progress}%`}
+              </div>
             </div>
-            <div style={{fontSize:10,color:D.muted,textAlign:"center"}}>
-              {progress<10?"Chargement du moteur… (1ère utilisation : ~10s)":progress<90?`${progress}% — Analyse…`:"Finalisation…"}
+            <div style={{width:"100%",maxWidth:280,height:4,background:C.surfaceHi,borderRadius:4,overflow:"hidden"}}>
+              <div style={{height:"100%",borderRadius:4,background:C.accent,
+                transition:"width .35s ease",width:`${Math.max(2,progress)}%`}}/>
             </div>
           </div>
         )}
 
-        {/* REVIEW */}
+        {/* ── REVIEW ── */}
         {mode==="review"&&(
-          <div style={{display:"flex",flexDirection:"column",height:"100%",animation:"drawerUp .28s cubic-bezier(.22,1,.36,1)"}}>
-            <div style={{flexShrink:0,padding:"12px 20px 10px",borderBottom:`1px solid ${D.border}`,
-              display:"flex",alignItems:"center",gap:12}}>
+          <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+            {/* Statut */}
+            <div style={{flexShrink:0,padding:"12px 20px",borderBottom:`1px solid ${C.border}`,
+              display:"flex",alignItems:"center",gap:10}}>
               {captured&&<img src={captured} alt=""
-                style={{width:50,height:34,objectFit:"cover",borderRadius:6,border:`1px solid ${D.border}`,flexShrink:0}}/>}
+                style={{width:48,height:32,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,flexShrink:0}}/>}
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
-                  <div style={{width:7,height:7,borderRadius:"50%",background:errMsg?D.danger:(fields.lot||fields.dlc)?D.ok:"#555"}}/>
-                  <span style={{fontSize:8,letterSpacing:2.5,textTransform:"uppercase",fontWeight:700,
-                    color:errMsg?D.danger:(fields.lot||fields.dlc)?D.ok:D.muted}}>
-                    {errMsg?"OCR indisponible":(fields.lot||fields.dlc)?"Lu avec succès":"Aucun champ détecté"}
+                  <div style={{width:7,height:7,borderRadius:"50%",
+                    background:errMsg?C.danger:(fields.lot||fields.dlc)?C.ok:C.surfaceHi,flexShrink:0}}/>
+                  <span style={{fontSize:12,fontWeight:600,
+                    color:errMsg?C.danger:(fields.lot||fields.dlc)?C.ok:C.muted}}>
+                    {errMsg?"OCR indisponible":(fields.lot||fields.dlc)?"Lecture réussie":"Aucun champ détecté"}
                   </span>
                 </div>
-                <div style={{fontSize:9,color:D.muted}}>{errMsg?"Remplissez les champs manuellement":"Vérifiez et corrigez si besoin"}</div>
+                <div style={{fontSize:11,color:C.muted}}>
+                  {errMsg?"Remplissez manuellement":"Vérifiez et corrigez si besoin"}
+                </div>
               </div>
             </div>
-            <div style={{flex:1,overflowY:"auto",padding:"18px 20px 0"}}>
-              <DField label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
-              <DField label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
-              <DField label="Parfum" value={fields.nom} onChange={v=>setFields(f=>({...f,nom:v}))} placeholder="Ex : Fraises Garriguettes"/>
-              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={D}/>
+            <div style={{flex:1,overflowY:"auto",padding:"20px 20px 0"}}>
+              <Field label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
+              <Field label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
+              <Field label="Parfum" value={fields.nom} onChange={v=>setFields(f=>({...f,nom:v}))} placeholder="Ex : Fraises Garriguettes"/>
+              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={{
+                muted:C.muted,border:C.border,copper:C.accent,text:C.text
+              }}/>
               {ocrText&&(
-                <details style={{marginBottom:14}}>
-                  <summary style={{fontSize:8,color:"rgba(200,170,140,0.36)",cursor:"pointer",letterSpacing:1}}>Texte OCR brut</summary>
-                  <pre style={{fontSize:8,color:"rgba(200,170,140,0.36)",whiteSpace:"pre-wrap",marginTop:6,maxHeight:70,overflow:"auto",lineHeight:1.4}}>{ocrText}</pre>
+                <details style={{marginBottom:14,marginTop:4}}>
+                  <summary style={{fontSize:11,color:C.muted,cursor:"pointer"}}>Texte OCR brut</summary>
+                  <pre style={{fontSize:10,color:C.muted,whiteSpace:"pre-wrap",marginTop:6,maxHeight:80,overflow:"auto",lineHeight:1.4,padding:"8px",background:C.surfaceHi,borderRadius:8}}>{ocrText}</pre>
                 </details>
               )}
             </div>
-            <div style={{flexShrink:0,padding:"14px 20px 28px",borderTop:`1px solid ${D.border}`,display:"flex",flexDirection:"column",gap:8}}>
-              <button onClick={confirm} disabled={!fields.lot&&!fields.dlc}
-                style={{width:"100%",
-                  background:(!fields.lot&&!fields.dlc)?"rgba(140,60,16,0.16)":`linear-gradient(135deg,${D.copperL},${D.copper})`,
-                  border:"none",color:(!fields.lot&&!fields.dlc)?"rgba(200,170,140,0.28)":"#fff",
-                  borderRadius:12,padding:"15px",fontSize:10,letterSpacing:2.5,textTransform:"uppercase",fontWeight:700,
-                  minHeight:"auto",cursor:(!fields.lot&&!fields.dlc)?"not-allowed":"pointer",
-                  boxShadow:(!fields.lot&&!fields.dlc)?"none":"0 4px 20px rgba(140,60,16,0.45)",transition:"all .18s"}}>
+            <div style={{flexShrink:0,padding:"14px 20px 32px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:8}}>
+              <button onClick={confirm} disabled={!fields.lot&&!fields.dlc} style={btn(C.accent,!fields.lot&&!fields.dlc)}>
                 Confirmer
               </button>
-              <button onClick={reset}
-                style={{width:"100%",background:"transparent",border:`1px solid ${D.border}`,
-                  color:D.muted,borderRadius:12,padding:"12px",fontSize:9,letterSpacing:2,
-                  textTransform:"uppercase",fontWeight:500,minHeight:"auto",cursor:"pointer"}}>
-                Rescanner
-              </button>
+              <button onClick={reset} style={btnOutline}>Rescanner</button>
             </div>
           </div>
         )}
 
-        {/* ERROR */}
+        {/* ── ERROR ── */}
         {mode==="error"&&(
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-            height:"100%",padding:"32px 24px",gap:18,animation:"fadein .25s ease"}}>
-            <div style={{width:48,height:48,borderRadius:"50%",background:"rgba(217,64,64,0.10)",
-              border:"1px solid rgba(217,64,64,0.30)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <span style={{fontSize:22,color:D.danger,fontWeight:700}}>!</span>
-            </div>
-            <div style={{fontSize:12,color:D.danger,lineHeight:1.8,textAlign:"center",maxWidth:280}}>{errMsg}</div>
-            <div style={{display:"flex",flexDirection:"column",gap:8,width:"100%",maxWidth:300}}>
-              <button onClick={reset}
-                style={{width:"100%",background:`linear-gradient(135deg,${D.copperL},${D.copper})`,
-                  border:"none",color:"#fff",borderRadius:12,padding:"15px",
-                  fontSize:10,letterSpacing:2,textTransform:"uppercase",fontWeight:700,minHeight:"auto",cursor:"pointer"}}>
-                Réessayer
-              </button>
-              <button onClick={()=>setMode("manual")}
-                style={{width:"100%",background:"transparent",border:`1px solid ${D.border}`,
-                  color:D.muted,borderRadius:12,padding:"12px",fontSize:9,letterSpacing:2,
-                  textTransform:"uppercase",fontWeight:500,minHeight:"auto",cursor:"pointer"}}>
-                Saisie manuelle
-              </button>
+            height:"100%",padding:"32px 24px",gap:20}}>
+            <div style={{width:52,height:52,borderRadius:"50%",
+              background:"rgba(224,82,82,0.10)",border:"1px solid rgba(224,82,82,0.30)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>⚠</div>
+            <div style={{fontSize:14,color:C.danger,lineHeight:1.7,textAlign:"center",maxWidth:280}}>{errMsg}</div>
+            <div style={{width:"100%",maxWidth:300,display:"flex",flexDirection:"column",gap:8}}>
+              <button onClick={reset} style={btn(C.accent,false)}>Réessayer</button>
+              <button onClick={()=>setMode("manual")} style={btnOutline}>Saisie manuelle</button>
             </div>
           </div>
         )}
 
-        {/* MANUAL */}
+        {/* ── MANUAL ── */}
         {mode==="manual"&&(
-          <div style={{display:"flex",flexDirection:"column",height:"100%",animation:"fadein .25s ease"}}>
-            <div style={{flexShrink:0,padding:"18px 20px 10px",borderBottom:`1px solid ${D.border}`}}>
-              <div style={{fontSize:8,letterSpacing:3,color:D.copper,textTransform:"uppercase",fontWeight:700}}>Saisie manuelle</div>
+          <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+            <div style={{flexShrink:0,padding:"16px 20px 12px",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.muted}}>Saisie manuelle</div>
             </div>
-            <div style={{flex:1,overflowY:"auto",padding:"18px 20px 0"}}>
-              <DField label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
-              <DField label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
-              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={D}/>
+            <div style={{flex:1,overflowY:"auto",padding:"20px 20px 0"}}>
+              <Field label="N° de lot" value={fields.lot} onChange={v=>setFields(f=>({...f,lot:v}))} placeholder="Ex : 6218161"/>
+              <Field label="DLC" value={fields.dlc} onChange={v=>setFields(f=>({...f,dlc:v}))} type="date"/>
+              <FormatToggle value={fields.format} onChange={v=>setFields(f=>({...f,format:v}))} D={{
+                muted:C.muted,border:C.border,copper:C.accent,text:C.text
+              }}/>
             </div>
-            <div style={{flexShrink:0,padding:"14px 20px 28px",borderTop:`1px solid ${D.border}`,display:"flex",flexDirection:"column",gap:8}}>
+            <div style={{flexShrink:0,padding:"14px 20px 32px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:8}}>
               <button onClick={()=>onResult({lot:fields.lot||null,dlc:fields.dlc||null,fabrique:null,nom:null,format:fields.format||null,ref:null})}
-                disabled={!fields.lot&&!fields.dlc}
-                style={{width:"100%",
-                  background:(!fields.lot&&!fields.dlc)?"rgba(140,60,16,0.16)":`linear-gradient(135deg,${D.copperL},${D.copper})`,
-                  border:"none",color:(!fields.lot&&!fields.dlc)?"rgba(200,170,140,0.28)":"#fff",
-                  borderRadius:12,padding:"15px",fontSize:10,letterSpacing:2.5,textTransform:"uppercase",fontWeight:700,
-                  minHeight:"auto",cursor:(!fields.lot&&!fields.dlc)?"not-allowed":"pointer",
-                  boxShadow:(!fields.lot&&!fields.dlc)?"none":"0 4px 20px rgba(140,60,16,0.45)"}}>
+                disabled={!fields.lot&&!fields.dlc} style={btn(C.accent,!fields.lot&&!fields.dlc)}>
                 Valider
               </button>
-              {!captured&&(
-                <button onClick={reset}
-                  style={{width:"100%",background:"transparent",border:`1px solid ${D.border}`,
-                    color:D.muted,borderRadius:12,padding:"12px",fontSize:9,letterSpacing:2,
-                    textTransform:"uppercase",fontWeight:500,minHeight:"auto",cursor:"pointer"}}>
-                  Ouvrir la caméra
-                </button>
-              )}
+              {!captured&&<button onClick={reset} style={btnOutline}>Ouvrir la caméra</button>}
             </div>
           </div>
         )}
