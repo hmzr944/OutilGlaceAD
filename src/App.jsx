@@ -258,119 +258,122 @@ const tryTextDetector = async (imageSource) => {
   } catch { return null; }
 };
 
-/** Extrait lot / DLC / date fab d'un texte OCR brut — version robuste */
+/** Extrait lot / DLC / date fab / format d'un texte OCR brut */
 const parseOCRText = (raw) => {
-  if(!raw) return { lot:null, dlc:null, fabrique:null, nom:null };
+  if(!raw) return { lot:null, dlc:null, fabrique:null, nom:null, format:null };
 
-  /* toISO corrige aussi les artefacts OCR dans la date elle-même */
+  /* Normalise artefacts OCR courants */
+  const txt = raw
+    .replace(/\r\n/g,'\n')
+    .replace(/[|]{2,}/g,' ')
+    .replace(/[lI](?=\d)/g,'1')
+    .replace(/[oO](?=\d)/g,'0');
+
+  const lines = txt.split('\n').map(l=>l.trim()).filter(l=>l.length>1);
+  const full  = lines.join(' ');
+
+  /* Convertit une chaîne en date ISO.
+   * BUG CORRIGÉ : on n'écrase plus les espaces avant d'appliquer le regex.
+   * Accepte /, -, ., espace comme séparateur. */
   const toISO = s => {
     if(!s) return null;
-    const clean = String(s)
-      .replace(/[oOqQ]/g,'0')   // O,o,q,Q → 0 (fréquent dans les dates)
-      .replace(/[lI|]/g,'1')    // l,I,| → 1
-      .replace(/\s+/g,'')       // enlève les espaces (08 / 06 → 08/06)
-      .replace(/,/g,'.');       // virgule → point séparateur
-    const m = clean.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+    const c = String(s)
+      .replace(/[oOqQ]/g,'0')
+      .replace(/[lI|]/g,'1')
+      .replace(/,/g,'.');
+    const m = c.match(/(\d{1,2})[\s\/\-\.](\d{1,2})[\s\/\-\.](\d{2,4})/);
     if(!m) return null;
-    const [,d,mo,y] = m;
-    const year = y.length===2 ? (parseInt(y)>50?'19':'20')+y : y;
+    const [,d,mo,y]=m;
+    const year = y.length===2?(parseInt(y)>50?'19':'20')+y:y;
     if(+mo<1||+mo>12||+d<1||+d>31) return null;
     return `${year}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
   };
 
-  /* Extrait toutes les dates valides d'une chaîne */
   const allDatesIn = s => {
-    const found = [];
-    // Cherche dd[sep]mm[sep](yy)yy avec séparateur / - . ou espace
-    for(const m of s.matchAll(/(\d{1,2}[\s\/\-\.]+\d{1,2}[\s\/\-\.]+\d{2,4})/g)){
-      const iso = toISO(m[1]);
-      if(iso) found.push(iso);
+    const found=[];
+    for(const m of String(s).matchAll(/(\d{1,2}[\s\/\-\.]\d{1,2}[\s\/\-\.]\d{2,4})/g)){
+      const iso=toISO(m[1]); if(iso) found.push(iso);
     }
     return found;
   };
 
-  /* Normalise le texte brut */
-  const txt = raw
-    .replace(/[|]{2,}/g,' ')
-    .replace(/[lI](?=\d)/g,'1')   // l/I précédant un chiffre → 1
-    .replace(/[oO](?=\d)/g,'0');  // o/O précédant un chiffre → 0
-
-  const lines = txt.split('\n').map(l=>l.trim()).filter(l=>l.length>0);
-  const full  = lines.join(' ');
-
   let lot=null, dlc=null, fabrique=null, nom=null;
 
-  /* ── Lot ──────────────────────────────────────────────── */
-  const lotM =
-    full.match(/(?:lot|n[o°]\s*lot|num[eé]ro?\s*lot)\s*[:\-]?\s*([A-Z0-9]{4,12})/i) ||
-    full.match(/\bL\s*[:\-]\s*([A-Z0-9]{4,12})/i) ||
-    full.match(/\b(\d{7})\b/);
-  if(lotM) lot = lotM[1].trim();
-
-  /* ── DLC — cherche ligne par ligne, puis fallback global ── */
-  // Tentative 1 : ligne contenant DLC/DLUO + une date
+  /* ── Lot ── */
   for(const line of lines){
-    if(/d[\s\-\.]*l[\s\-\.]*[co0]/i.test(line)||/dluo/i.test(line)||/consomm/i.test(line)||/best.before/i.test(line)){
-      const dates = allDatesIn(line);
+    const m =
+      line.match(/(?:l[o0]t|n[o°]\s*l[o0]t|num[eé]ro?\s*l[o0]t|batch)\s*[:\-\.°\s]*([A-Za-z0-9]{4,14})/i)||
+      line.match(/\bL\s*[:=\-]\s*([A-Za-z0-9]{4,14})/i);
+    if(m&&m[1]&&!/^\d{1,2}$/.test(m[1])){ lot=m[1].replace(/\s/g,'').trim(); break; }
+  }
+  if(!lot){
+    // Fallback : toute séquence de 6–10 chiffres
+    const m=full.match(/\b(\d{6,10})\b/);
+    if(m) lot=m[1];
+  }
+
+  /* ── DLC ── */
+  const dlcKw=/d[\s\-\.]*l[\s\-\.]*[co0]|dluo|best[\s\-]*before|consomm/i;
+  for(const [i,line] of lines.entries()){
+    if(dlcKw.test(line)){
+      const dates=allDatesIn(line);
       if(dates.length){ dlc=dates[0]; break; }
-      // Date peut être sur la ligne suivante (DLC\n08/06/2026)
-      const idx = lines.indexOf(line);
-      if(idx<lines.length-1){ const d2=allDatesIn(lines[idx+1]); if(d2.length){ dlc=d2[0]; break; } }
+      if(i+1<lines.length){ const d2=allDatesIn(lines[i+1]); if(d2.length){ dlc=d2[0]; break; } }
     }
   }
-  // Tentative 2 : pattern global avec keyword
   if(!dlc){
-    const m = full.match(/d[\s\-\.]*l[\s\-\.]*[co0]\s*[:\-]?\s*(\d[\d\s\/\-\.,oOlI]{4,14})/i);
-    if(m) dlc = toISO(m[1]);
+    const m=full.match(/d[\s\-\.]*l[\s\-\.]*[co0]\s*[:\-\.]?\s*(\d[\d\s\/\-\.,oOlI]{3,16})/i);
+    if(m) dlc=toISO(m[1]);
   }
-  // Tentative 3 : on a le lot, on prend la date la plus récente = DLC
-  if(!dlc && lot){
-    const allDates = allDatesIn(full).sort();
-    if(allDates.length) dlc = allDates[allDates.length-1];
+  // Fallback : date la plus future du texte = DLC probable
+  if(!dlc){
+    const today=new Date().toISOString().slice(0,10);
+    const all=allDatesIn(full).sort();
+    const future=all.filter(d=>d>today);
+    if(future.length) dlc=future[future.length-1];
+    else if(all.length) dlc=all[all.length-1];
   }
 
-  /* ── Date de fabrication ───────────────────────────────── */
-  for(const line of lines){
-    if(/fabri[qc]/i.test(line)||/prod\S*/i.test(line)){
-      const dates = allDatesIn(line);
-      const d = dates.find(d=>d!==dlc);
+  /* ── Date de fabrication ── */
+  for(const [i,line] of lines.entries()){
+    if(/fabri[qc]|produit\s*le|\bfab\b/i.test(line)){
+      const dates=allDatesIn(line);
+      const d=dates.find(d=>d!==dlc);
       if(d){ fabrique=d; break; }
+      if(i+1<lines.length){
+        const next=allDatesIn(lines[i+1]).find(d=>d!==dlc);
+        if(next){ fabrique=next; break; }
+      }
     }
   }
-  if(!fabrique){
-    const m = full.match(/(?:fabri[qc]\S+\s+le|fabri[qc]\S*)\s*[:\-]?\s*(\d[\d\s\/\-\.,]{4,14})/i);
-    if(m){ const iso=toISO(m[1]); if(iso&&iso!==dlc) fabrique=iso; }
-  }
 
-  /* ── Nom du parfum — matching sur les recettes connues ─── */
-  // 1. Cherche d'abord parmi les recettes connues (accent-normalisé)
-  const normFull = full.normalize("NFD").replace(/[̀-ͯ]/g,"");
+  /* ── Nom du parfum ── */
+  const normFull=full.normalize("NFD").replace(/[̀-ͯ]/g,"");
   for(const r of RECIPES){
-    const words = r.name.normalize("NFD").replace(/[̀-ͯ]/g,"").split(/\s+/).filter(w=>w.length>=3);
+    const words=r.name.normalize("NFD").replace(/[̀-ͯ]/g,"").split(/\s+/).filter(w=>w.length>=3);
     if(words.length===0) continue;
-    const hits = words.filter(w=>new RegExp(w.replace(/[^a-zA-Z0-9]/g,'.'),'i').test(normFull)).length;
-    if(hits >= Math.max(1, Math.ceil(words.length*0.5))){ nom=r.name; break; }
+    const hits=words.filter(w=>new RegExp(w.replace(/[^a-zA-Z0-9]/g,'.'),'i').test(normFull)).length;
+    if(hits>=Math.max(1,Math.ceil(words.length*0.5))){ nom=r.name; break; }
   }
-  // 2. Fallback : préfixe "sorbet/glace/carapine" + nom
   if(!nom){
-    const nomM = full.match(/(?:carapine|sorbet|glace)\s+([A-ZÀ-Ÿa-zà-ÿ][A-ZÀ-Ÿa-zà-ÿ\s&]{3,40}?)(?:\s*[\-–—\d]|$)/i);
-    if(nomM) nom = nomM[1].trim();
+    const m=full.match(/(?:carapine|sorbet|glace)\s+([A-ZÀ-Ÿa-zà-ÿ][A-ZÀ-Ÿa-zà-ÿ\s&]{3,40}?)(?:\s*[\-–—\d]|$)/i);
+    if(m) nom=m[1].trim();
   }
 
-  /* ── Format carapine : 5L (pleine/GM) ou 2.5L (demi/PM) ── */
-  let format = null;
+  /* ── Format PM / GM — case-insensitive, espaces et points tolérés ── */
+  let format=null;
   if(
-    /\b5[\s\-]*[lL1!]\b/.test(full) ||          // "5L", "5l", "5 L", "5 1" (OCR confusion)
-    /\b5[\s\-]*litres?\b/i.test(full) ||
-    /\bGM\b/.test(full) ||
+    /\b5\s*[Ll1!]\b/.test(full)||
+    /\b5\s*litres?\b/i.test(full)||
+    /\bG[\s\.]?M\b/i.test(full)||
     /grande[\s\-]*mesure/i.test(full)
-  ) format = "pleine";
+  ) format="pleine";
   else if(
-    /\b2[,\.\s]5[\s\-]*[lL1!]\b/.test(full) ||  // "2.5L", "2,5L", "2 5L"
-    /\b2[,\.\s]5[\s\-]*litres?\b/i.test(full) ||
-    /\bPM\b/.test(full) ||
+    /\b2[\s,\.]*5\s*[Ll1!]\b/.test(full)||
+    /\b2[\s,\.]*5\s*litres?\b/i.test(full)||
+    /\bP[\s\.]?M\b/i.test(full)||
     /petite[\s\-]*mesure/i.test(full)
-  ) format = "demi";
+  ) format="demi";
 
   return { lot, dlc, fabrique, nom, format };
 };
@@ -3564,39 +3567,42 @@ function FormatToggle({value, onChange, D}){
   );
 }
 
-/** Prétraitement canvas : grayscale + seuillage adaptatif via table des sommes intégrales.
- *  O(w×h) — rapide sur mobile. Bien meilleur qu'un boost de contraste pour étiquettes. */
+/** Prétraitement canvas : niveaux de gris + seuillage d'Otsu (O(n), optimal pour étiquettes). */
 function preprocessForOCR(canvas){
   const ctx=canvas.getContext("2d");
   const {width:W,height:H}=canvas;
   const img=ctx.getImageData(0,0,W,H);
   const d=img.data;
-  const R=20; // demi-fenêtre (px)
   // 1. Niveaux de gris
-  const gray=new Float32Array(W*H);
+  const gray=new Uint8Array(W*H);
   for(let i=0;i<gray.length;i++){
     const o=i*4;
-    gray[i]=0.299*d[o]+0.587*d[o+1]+0.114*d[o+2];
+    gray[i]=Math.round(0.299*d[o]+0.587*d[o+1]+0.114*d[o+2]);
   }
-  // 2. Table des sommes intégrales
-  const sat=new Float64Array(W*H);
-  for(let y=0;y<H;y++){
-    for(let x=0;x<W;x++){
-      const i=y*W+x;
-      sat[i]=gray[i]+(x>0?sat[i-1]:0)+(y>0?sat[i-W]:0)-(x>0&&y>0?sat[i-W-1]:0);
-    }
+  // 2. Histogramme
+  const hist=new Int32Array(256);
+  for(const v of gray) hist[v]++;
+  // 3. Seuil d'Otsu : maximise la variance inter-classes
+  const n=gray.length;
+  let sum=0;
+  for(let i=0;i<256;i++) sum+=i*hist[i];
+  let sumB=0,wB=0,max=0,thresh=128;
+  for(let i=0;i<256;i++){
+    wB+=hist[i]; if(!wB) continue;
+    const wF=n-wB; if(!wF) break;
+    sumB+=i*hist[i];
+    const mB=sumB/wB, mF=(sum-sumB)/wF;
+    const btwn=wB*wF*(mB-mF)**2;
+    if(btwn>max){ max=btwn; thresh=i; }
   }
-  // 3. Seuillage : pixel < moyenne locale − 8 → noir, sinon blanc
-  for(let y=0;y<H;y++){
-    const y1=Math.max(0,y-R), y2=Math.min(H-1,y+R);
-    for(let x=0;x<W;x++){
-      const x1=Math.max(0,x-R), x2=Math.min(W-1,x+R);
-      const cnt=(y2-y1+1)*(x2-x1+1);
-      const sum=sat[y2*W+x2]-(x1>0?sat[y2*W+x1-1]:0)-(y1>0?sat[(y1-1)*W+x2]:0)+(x1>0&&y1>0?sat[(y1-1)*W+x1-1]:0);
-      const v=gray[y*W+x]<(sum/cnt)-8?0:255;
-      const o=(y*W+x)*4;
-      d[o]=d[o+1]=d[o+2]=v; d[o+3]=255;
-    }
+  // 4. Binarisation + forcer fond blanc si image principalement foncée (texte clair sur fond sombre)
+  let darkPx=0;
+  for(const v of gray) if(v<thresh) darkPx++;
+  const invert=darkPx/n>0.55; // si >55% de pixels sombres → image inversée
+  for(let i=0;i<gray.length;i++){
+    const v=(gray[i]<thresh)===invert?255:0;
+    const o=i*4;
+    d[o]=d[o+1]=d[o+2]=v; d[o+3]=255;
   }
   ctx.putImageData(img,0,0);
 }
