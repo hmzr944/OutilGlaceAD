@@ -3189,6 +3189,38 @@ AJUSTEMENTS — raisons`
 
               {/* Étape 4 — Date mise en pozzetti */}
               <StepRow num={4} title="Date de mise en pozzetti">
+                {/* Raccourcis Dimanche / Mardi / Aujourd'hui */}
+                {(()=>{
+                  const lastDow=(target)=>{
+                    const d=new Date(); const cur=d.getDay();
+                    const diff=(cur-target+7)%7||7; // 0 = aujourd'hui → prendre 7j avant
+                    d.setDate(d.getDate()-diff);
+                    return d.toISOString().split("T")[0];
+                  };
+                  const shortcuts=[
+                    {label:"Dim. passé", iso:lastDow(0), day:0},
+                    {label:"Mar. passé", iso:lastDow(2), day:2},
+                    {label:"Aujourd'hui",iso:todayISO(),  day:-1},
+                  ];
+                  return(
+                    <div style={{display:"flex",gap:6,marginBottom:10}}>
+                      {shortcuts.map(s=>{
+                        const active=tracaNew.miseEnPlace===s.iso;
+                        return(
+                          <button key={s.label} onClick={()=>setTracaNew(p=>({...p,miseEnPlace:s.iso,retrait:addDays(s.iso,14)}))}
+                            style={{flex:1,padding:"7px 6px",border:`1px solid ${active?G.copper:G.border}`,
+                              background:active?"rgba(140,60,16,0.10)":"rgba(255,251,246,0.5)",
+                              color:active?G.copper:G.mid,borderRadius:8,cursor:"pointer",
+                              fontSize:9,fontWeight:active?700:400,minHeight:"auto",transition:"all .15s",
+                              textAlign:"center"}}>
+                            {s.label}<br/>
+                            <span style={{fontSize:8,opacity:.6}}>{fmtDate(s.iso)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
                   <div>
                     <SLabel>Mise en pozzetti</SLabel>
