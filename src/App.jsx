@@ -312,11 +312,13 @@ const parseOCRText = (raw) => {
     if(m) lot=m[1];
   }
 
-  /* ── DLC ── */
-  const dlcKw=/d[\s\-\.]*l[\s\-\.]*[co0]|dluo|best[\s\-]*before|consomm/i;
+  /* ── DLC : on cherche la date qui SUIT le mot-clé (évite de prendre la date de fab) ── */
+  const dlcKwRe=/d[\s\-\.]*l[\s\-\.]*[co0]|dluo|best[\s\-]*before|consomm/i;
   for(const [i,line] of lines.entries()){
-    if(dlcKw.test(line)){
-      const dates=allDatesIn(line);
+    const m=dlcKwRe.exec(line);
+    if(m){
+      const afterKw=line.slice(m.index+m[0].length); // texte APRÈS le mot-clé
+      const dates=allDatesIn(afterKw);
       if(dates.length){ dlc=dates[0]; break; }
       if(i+1<lines.length){ const d2=allDatesIn(lines[i+1]); if(d2.length){ dlc=d2[0]; break; } }
     }
@@ -325,19 +327,28 @@ const parseOCRText = (raw) => {
     const m=full.match(/d[\s\-\.]*l[\s\-\.]*[co0]\s*[:\-\.]?\s*(\d[\d\s\/\-\.,oOlI]{3,16})/i);
     if(m) dlc=toISO(m[1]);
   }
-  // Fallback : date la plus future du texte = DLC probable
+  // Fallback : si 2 dates dans le texte, la plus future = DLC, l'autre = fab
   if(!dlc){
     const today=new Date().toISOString().slice(0,10);
     const all=allDatesIn(full).sort();
     const future=all.filter(d=>d>today);
-    if(future.length) dlc=future[future.length-1];
-    else if(all.length) dlc=all[all.length-1];
+    if(future.length>=2){
+      dlc=future[future.length-1];
+      if(!fabrique) fabrique=future[0];
+    } else if(future.length===1){
+      dlc=future[0];
+    } else if(all.length){
+      dlc=all[all.length-1];
+    }
   }
 
-  /* ── Date de fabrication ── */
+  /* ── Date de fabrication : même principe, date après le mot-clé ── */
+  const fabKwRe=/fabri[qc]|produit\s*le|\bfab[\s\-:\.]/i;
   for(const [i,line] of lines.entries()){
-    if(/fabri[qc]|produit\s*le|\bfab\b/i.test(line)){
-      const dates=allDatesIn(line);
+    const m=fabKwRe.exec(line);
+    if(m){
+      const afterKw=line.slice(m.index+m[0].length);
+      const dates=allDatesIn(afterKw);
       const d=dates.find(d=>d!==dlc);
       if(d){ fabrique=d; break; }
       if(i+1<lines.length){
@@ -1065,7 +1076,10 @@ export default function App(){
 
   const toastRef      = useRef(null);
   const weatherRef    = useRef(null);
-  const lastInvEditRef= useRef(0); // timestamp dernier edit local inventory
+  const lastInvEditRef  = useRef(0);
+  const lastTracaEditRef= useRef(0);
+  const lastTempEditRef = useRef(0);
+  const tracaFormRef    = useRef(null);
   const season    = getSeason(weekOffset);
   const eco       = computeEco(snapshot, inventory);
   const invStatus    = useDebouncedSave("ad9_inv",     inventory,    loaded);
@@ -1213,6 +1227,7 @@ AJUSTEMENTS — raisons`
 
   /* ── Traçabilité ── */
   const saveTraca = async recs => {
+    lastTracaEditRef.current = Date.now();
     setTracaRecords(recs);
     try{await storage.set("ad9_traca",JSON.stringify(recs),true);}catch{}
   };
@@ -1259,10 +1274,12 @@ AJUSTEMENTS — raisons`
       const{inv,traca,temprec}=await r.json();
       // Ne pas écraser l'inventaire local si un edit a eu lieu dans les 2 dernières secondes
       // (évite la race condition entre debounce 600ms et le push SSE)
-      const invRecentlyEdited = Date.now()-lastInvEditRef.current < 2000;
-      if(inv&&!invRecentlyEdited) setInventory(cur=>{try{const v=JSON.parse(inv);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
-      if(traca)  setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
-      if(temprec)setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      const invRecentlyEdited   = Date.now()-lastInvEditRef.current   < 3000;
+      const tracaRecentlyEdited = Date.now()-lastTracaEditRef.current < 3000;
+      const tempRecentlyEdited  = Date.now()-lastTempEditRef.current  < 3000;
+      if(inv   &&!invRecentlyEdited)   setInventory(   cur=>{try{const v=JSON.parse(inv);   return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      if(traca &&!tracaRecentlyEdited) setTracaRecords(cur=>{try{const v=JSON.parse(traca); return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
+      if(temprec&&!tempRecentlyEdited) setTempRecs(    cur=>{try{const v=JSON.parse(temprec);return JSON.stringify(cur)===JSON.stringify(v)?cur:v;}catch{return cur;}});
       setLastSync(new Date());
     }catch{}
     try{
@@ -2463,6 +2480,7 @@ AJUSTEMENTS — raisons`
                         heure:new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}),
                         author:user?.name||"Équipe"};
                       const next=[rec,...tempRecs];
+                      lastTempEditRef.current=Date.now();
                       setTempRecs(next);
                       storage.set("ad9_temprec",JSON.stringify(next)).catch(()=>{});
                       historyAPI.push({type:"temperature",label:`Réception — ${rec.nom||"—"}${rec.format?" ("+rec.format+")":""}`,author:user?.name||"Équipe",data:{nom:rec.nom,format:rec.format,lot:rec.lot,temp:rec.temp,heure:rec.heure,alert:rec.temp!==null&&rec.temp>-18}}).then(e=>{if(e)setHistEntries(prev=>[e,...prev]);});
@@ -3034,14 +3052,13 @@ AJUSTEMENTS — raisons`
               <ScanModal
                 recipeName={RECIPES.find(r=>r.id===scanTarget.id)?.name||tracaNew.recipeId&&RECIPES.find(r=>r.id===tracaNew.recipeId)?.name}
                 onResult={parsed=>{
-                  // Auto-sélection du parfum si OCR l'a détecté
                   let autoRecipe=null;
                   if(parsed.nom){
                     const nNom=parsed.nom.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
                     autoRecipe=RECIPES.find(r=>{
                       const nR=r.name.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
                       const wR=nR.split(/\s+/).filter(w=>w.length>=3);
-                      return wR.some(w=>nNom.includes(w)||nNom.replace(/./g,c=>c+".?").slice(0,-2));
+                      return wR.some(w=>nNom.includes(w));
                     });
                   }
                   setTracaNew(p=>({
@@ -3052,16 +3069,21 @@ AJUSTEMENTS — raisons`
                     ...(autoRecipe?{recipeId:autoRecipe.id}:{}),
                   }));
                   setScanTarget(null);
-                  const parts=["Lot/DLC récupérés"];
-                  if(parsed.format) parts.push(`format ${parsed.format==="pleine"?"5L":"2.5L"}`);
-                  if(autoRecipe) parts.push(`parfum: ${autoRecipe.name}`);
-                  showToast(parts.join(" · "));
+                  // Scroll vers le formulaire pour voir les champs pré-remplis
+                  setTimeout(()=>tracaFormRef.current?.scrollIntoView({behavior:"smooth",block:"nearest"}),200);
+                  const parts=[];
+                  if(parsed.lot) parts.push(`Lot ${parsed.lot}`);
+                  if(parsed.dlc) parts.push(`DLC ${fmtDate(parsed.dlc)}`);
+                  if(parsed.format) parts.push(parsed.format==="pleine"?"5L":"2.5L");
+                  if(autoRecipe) parts.push(autoRecipe.name);
+                  showToast(parts.length?`Scanné : ${parts.join(" · ")}`:"Scan ok — vérifiez les champs");
                 }}
                 onClose={()=>setScanTarget(null)}
               />
             )}
 
             {/* Formulaire 4 étapes */}
+            <div ref={tracaFormRef}>
             <Card style={{padding:"20px",marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:G.dark,marginBottom:18}}>Nouvelle mise en place</div>
 
@@ -3119,29 +3141,49 @@ AJUSTEMENTS — raisons`
               <StepRow num={3} title="Lot + DLC (scan ou saisie)">
                 <button onClick={()=>setScanTarget({id:tracaNew.recipeId||"scan",mode:"tracabilite"})}
                   style={{width:"100%",background:"rgba(140,60,16,0.07)",border:`1px solid ${G.borderS}`,
-                    borderRadius:10,padding:"12px 16px",fontSize:11,color:G.copper,
+                    borderRadius:10,padding:"12px 16px",fontSize:12,color:G.copper,
                     cursor:"pointer",fontWeight:600,marginBottom:12,minHeight:"auto",
                     display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-                  Scanner l'étiquette → Lot + DLC
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Scanner l'étiquette
                 </button>
-                <div style={{marginBottom:10}}>
-                  <SLabel>N° de lot</SLabel>
-                  <input value={tracaNew.lot} placeholder="Ex : 6218161"
-                    onChange={e=>setTracaNew(p=>({...p,lot:e.target.value}))}
-                    style={{width:"100%",marginTop:5,padding:"11px 14px",
-                      border:`1px solid ${tracaNew.lot?G.borderS:G.border}`,borderRadius:8,
-                      fontSize:16,fontWeight:600,letterSpacing:.5,
-                      background:tracaNew.lot?"rgba(255,251,246,0.95)":"rgba(255,251,246,0.5)",
-                      color:G.dark,minHeight:"auto"}}/>
-                </div>
-                <div>
-                  <SLabel>DLC</SLabel>
-                  <input type="date" value={tracaNew.dlc}
-                    onChange={e=>setTracaNew(p=>({...p,dlc:e.target.value}))}
-                    style={{width:"100%",marginTop:5,padding:"9px 10px",
-                      border:`1px solid ${tracaNew.dlc?G.borderS:G.border}`,borderRadius:8,fontSize:14,
-                      background:tracaNew.dlc?"rgba(255,251,246,0.9)":"rgba(255,251,246,0.5)",
-                      color:G.dark,minHeight:"auto"}}/>
+                {/* Récap OCR quand les champs sont remplis */}
+                {(tracaNew.lot||tracaNew.dlc)&&(
+                  <div style={{display:"flex",alignItems:"center",gap:8,
+                    background:"rgba(30,94,50,0.07)",border:"1px solid rgba(30,94,50,0.18)",
+                    borderRadius:8,padding:"8px 12px",marginBottom:12}}>
+                    <span style={{color:G.ok,fontSize:16,flexShrink:0}}>✓</span>
+                    <div style={{fontSize:12,color:G.ok,lineHeight:1.5}}>
+                      {tracaNew.lot&&<span><strong>Lot</strong> {tracaNew.lot}</span>}
+                      {tracaNew.lot&&tracaNew.dlc&&<span style={{margin:"0 6px",opacity:.4}}>·</span>}
+                      {tracaNew.dlc&&<span><strong>DLC</strong> {fmtDate(tracaNew.dlc)}</span>}
+                      {tracaNew.format&&<span style={{marginLeft:6,background:"rgba(30,94,50,0.15)",padding:"1px 6px",borderRadius:4,fontSize:11}}>{tracaNew.format==="pleine"?"5L / GM":"2.5L / PM"}</span>}
+                    </div>
+                    <button onClick={()=>setTracaNew(p=>({...p,lot:"",dlc:"",format:"demi"}))}
+                      style={{marginLeft:"auto",background:"none",border:"none",color:"rgba(30,94,50,0.45)",
+                        cursor:"pointer",fontSize:14,padding:"0 2px",minHeight:"auto",lineHeight:1}}>✕</button>
+                  </div>
+                )}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div>
+                    <SLabel>N° de lot</SLabel>
+                    <input value={tracaNew.lot} placeholder="6218161"
+                      onChange={e=>setTracaNew(p=>({...p,lot:e.target.value}))}
+                      style={{width:"100%",marginTop:5,padding:"11px 14px",
+                        border:`1px solid ${tracaNew.lot?G.borderS:G.border}`,borderRadius:8,
+                        fontSize:15,fontWeight:tracaNew.lot?600:400,
+                        background:tracaNew.lot?"rgba(255,251,246,0.95)":"rgba(255,251,246,0.5)",
+                        color:G.dark,minHeight:"auto"}}/>
+                  </div>
+                  <div>
+                    <SLabel>DLC</SLabel>
+                    <input type="date" value={tracaNew.dlc}
+                      onChange={e=>setTracaNew(p=>({...p,dlc:e.target.value}))}
+                      style={{width:"100%",marginTop:5,padding:"9px 10px",
+                        border:`1px solid ${tracaNew.dlc?G.borderS:G.border}`,borderRadius:8,fontSize:14,
+                        background:tracaNew.dlc?"rgba(255,251,246,0.9)":"rgba(255,251,246,0.5)",
+                        color:G.dark,minHeight:"auto"}}/>
+                  </div>
                 </div>
               </StepRow>
 
@@ -3207,6 +3249,7 @@ AJUSTEMENTS — raisons`
                   showToast(deductedFrom?`Mise en place + 1 ${fmt}-bac déduit (${zoneSrc})`:"Mise en place enregistrée — stock Réserve/Taxi = 0");
                 }}/>
             </Card>
+            </div>
             {/* ── Registre organisé par jour puis par parfum ── */}
             {tracaRecords.length>0?(()=>{
               /* Grouper par date de mise en place, trier par date desc + parfum asc */
