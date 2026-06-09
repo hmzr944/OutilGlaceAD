@@ -463,10 +463,12 @@ const loadJsPDF = () => new Promise((res,rej) => {
   document.head.appendChild(s);
 });
 
+const isMobile = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+
 const sharePDF = async (blob, title) => {
   const fn = `${title.toLowerCase().replace(/[^a-z0-9]/g,"-")}.pdf`;
   const f  = new File([blob], fn, {type:"application/pdf"});
-  if(navigator.share && navigator.canShare && navigator.canShare({files:[f]})){
+  if(isMobile() && navigator.share && navigator.canShare && navigator.canShare({files:[f]})){
     try{ await navigator.share({files:[f], title}); }
     catch(e){ if(e.name!=="AbortError") throw e; }
   } else {
