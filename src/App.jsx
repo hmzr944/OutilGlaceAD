@@ -2936,14 +2936,18 @@ AJUSTEMENTS — raisons`
             <BtnRow>
               <GBtn label={pdfLoading?"PDF…":"Exporter PDF"} disabled={pdfLoading} onClick={async()=>{
                 setPdfLoading(true);
-                try{await buildInventoryPDF(inventory,todayFull());}
+                const stockDateFull=new Date(stockDate+"T12:00:00").toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+                try{await buildInventoryPDF(inventory,stockDateFull);}
                 catch{showToast("Erreur PDF");}
                 setPdfLoading(false);
               }}/>
-              <GBtn small label="Envoyer aux docs" disabled={pdfLoading} onClick={()=>setSendDocPending({
-                buildFn:()=>buildInventoryPDF(inventory,todayFull(),true),
-                docType:"inventaire",title:`État des stocks — ${new Date(stockDate+"T12:00:00").toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
-              })}/>
+              <GBtn small label="Envoyer aux docs" disabled={pdfLoading} onClick={()=>{
+                const stockDateFull=new Date(stockDate+"T12:00:00").toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+                setSendDocPending({
+                  buildFn:()=>buildInventoryPDF(inventory,stockDateFull,true),
+                  docType:"inventaire",title:`État des stocks — ${new Date(stockDate+"T12:00:00").toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
+                });
+              }}/>
               <GBtn primary label="Enregistrer dans le journal" onClick={async()=>{
                 try { await storage.set("ad9_inv", JSON.stringify(inventory)); } catch {}
                 const summary=RECIPES.filter(r=>totalZ(inventory[r.id])>0)
