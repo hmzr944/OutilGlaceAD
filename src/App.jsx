@@ -982,6 +982,7 @@ const Card = ({children, style={}, onClick}) => (
 export default function App(){
   const [tab,          setTab]          = useState("accueil");
   const [weekOffset,   setWeekOffset]   = useState(0);
+  const [stockDate,    setStockDate]    = useState(()=>todayISO());
   const [activeZone,   setActiveZone]   = useState("reserve");
   const [delivZone,    setDelivZone]    = useState("reserve");
   /* delivery : { [recipeId]: { demi, pleine, temp } } */
@@ -2893,6 +2894,43 @@ AJUSTEMENTS — raisons`
                 })}
               </div>
             ))}
+            {/* Sélecteur de date pour le journal */}
+            {(()=>{
+              const lastDow=(target)=>{
+                const d=new Date(); const cur=d.getDay();
+                const diff=(cur-target+7)%7||7;
+                d.setDate(d.getDate()-diff);
+                return d.toISOString().split("T")[0];
+              };
+              const shortcuts=[
+                {label:"Dim. passé", iso:lastDow(0)},
+                {label:"Mar. passé", iso:lastDow(2)},
+                {label:"Aujourd'hui",iso:todayISO()},
+              ];
+              return(
+                <div style={{marginBottom:12,padding:"10px 12px",background:"rgba(255,251,246,0.7)",border:`1px solid ${G.border}`,borderRadius:10}}>
+                  <div style={{fontSize:9,letterSpacing:2,color:G.copper,textTransform:"uppercase",marginBottom:8}}>Date du stock</div>
+                  <div style={{display:"flex",gap:6,marginBottom:8}}>
+                    {shortcuts.map(s=>{
+                      const active=stockDate===s.iso;
+                      return(
+                        <button key={s.label} onClick={()=>setStockDate(s.iso)}
+                          style={{flex:1,padding:"7px 4px",border:`1px solid ${active?G.copper:G.border}`,
+                            background:active?"rgba(140,60,16,0.10)":"rgba(255,255,255,0.5)",
+                            color:active?G.copper:G.mid,borderRadius:8,cursor:"pointer",
+                            fontSize:9,fontWeight:active?700:400,minHeight:"auto",transition:"all .15s",textAlign:"center"}}>
+                          {s.label}<br/>
+                          <span style={{fontSize:8,opacity:.6}}>{fmtDate(s.iso)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input type="date" value={stockDate} onChange={e=>setStockDate(e.target.value)}
+                    style={{width:"100%",padding:"8px 10px",border:`1px solid ${G.borderS}`,
+                      borderRadius:8,fontSize:12,background:"rgba(255,255,255,0.8)",color:G.dark,minHeight:"auto",boxSizing:"border-box"}}/>
+                </div>
+              );
+            })()}
             <BtnRow>
               <GBtn label={pdfLoading?"PDF…":"Exporter PDF"} disabled={pdfLoading} onClick={async()=>{
                 setPdfLoading(true);
@@ -2902,14 +2940,14 @@ AJUSTEMENTS — raisons`
               }}/>
               <GBtn small label="Envoyer aux docs" disabled={pdfLoading} onClick={()=>setSendDocPending({
                 buildFn:()=>buildInventoryPDF(inventory,todayFull(),true),
-                docType:"inventaire",title:`État des stocks — ${new Date().toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
+                docType:"inventaire",title:`État des stocks — ${new Date(stockDate+"T12:00:00").toLocaleDateString("fr-FR")}`,weekLbl:weekLabel(weekOffset)
               })}/>
               <GBtn primary label="Enregistrer dans le journal" onClick={async()=>{
-                // Sauvegarde immédiate du stock sur le serveur (pour la boutique + suggestions IA)
                 try { await storage.set("ad9_inv", JSON.stringify(inventory)); } catch {}
                 const summary=RECIPES.filter(r=>totalZ(inventory[r.id])>0)
                   .map(r=>({name:r.name,total:totalZ(inventory[r.id]),demi:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.demi||0),0),pleine:ZONES.reduce((s,z)=>s+(inventory[r.id]?.[z.id]?.pleine||0),0)}));
-                const entry=await historyAPI.push({type:"inventaire",label:`Mise à jour stock — ${new Date().toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"})}`,author:user?.name||"Équipe",data:{totalGl,summary}});
+                const stockDateObj=new Date(stockDate+"T12:00:00");
+                const entry=await historyAPI.push({type:"inventaire",label:`Mise à jour stock — ${stockDateObj.toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"})}`,author:user?.name||"Équipe",data:{totalGl,summary,date:stockDate}});
                 if(entry){
                   setHistEntries(prev=>[entry,...prev]);
                   showToast("Stock enregistré ✓");
